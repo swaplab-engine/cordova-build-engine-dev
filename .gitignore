@@ -1,0 +1,12 @@
+# File ini dibuat secara otomatis oleh aplikasi
+.DS_Store
+__MACOSX/
+node_modules/
+dist/
+build/
+temp_files/
+venv/
+env/
+.env
+debug.log
+secrets.json

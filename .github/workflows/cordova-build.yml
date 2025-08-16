@@ -1,0 +1,48 @@
+# Nama workflow yang akan muncul di tab Actions
+name: Cordova Android Build
+
+# Pemicu (trigger) workflow
+on:
+  push:
+    branches:
+      - 'build/**' # Memicu untuk setiap branch yang diawali dengan 'build/'
+
+# Pekerjaan (jobs) yang akan dijalankan
+jobs:
+  build:
+    # Nama pekerjaan
+    name: Build APK/AAB Release
+    
+    # Menentukan server virtual yang disediakan GitHub untuk menjalankan job
+    runs-on: ubuntu-latest
+
+    # Langkah-langkah (steps) yang akan dieksekusi
+    steps:
+      # 1. Mengambil kode dari branch yang memicu workflow
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Menyiapkan lingkungan Node.js (diperlukan oleh Cordova)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 3. Menginstal Cordova CLI secara global di server build
+      - name: Install Cordova
+        run: npm install -g cordova
+
+      # 4. Menginstal dependensi proyek (dari package.json)
+      - name: Install Project Dependencies
+        run: npm install
+
+      # 5. Menjalankan proses build Cordova untuk Android release
+      - name: Build Cordova Android Release
+        run: cordova build android --release
+
+      # 6. Mengunggah hasil build (APK) sebagai artifact
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: platforms/android/app/build/outputs/apk/release/app-release.apk
