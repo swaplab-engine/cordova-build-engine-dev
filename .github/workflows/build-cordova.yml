@@ -1,6 +1,6 @@
 # .github/workflows/build-cordova.yml
 
-name: Build Cordova from Upload
+name: Build Cordova DEBUG APK from Upload
 
 on:
   repository_dispatch:
@@ -19,13 +19,11 @@ jobs:
         with:
           node-version: '20'
 
-      # Setup JDK tanpa caching, karena file gradle belum ada
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-          # Hapus baris 'cache: gradle' dari sini karena file belum ada
 
       - name: Install Cordova CLI
         run: npm install -g cordova
@@ -34,40 +32,34 @@ jobs:
         run: |
           ZIP_URL="${{ github.event.client_payload.url }}"
           echo "Downloading project from $ZIP_URL"
-          
           curl -L --retry 5 --retry-delay 2 -o cordovaProject.zip "$ZIP_URL"
-          
           mkdir cordova-project
           unzip cordovaProject.zip -d cordova-project
           
-      # LANGKAH BARU: Konfigurasi cache untuk Gradle
-      # Dilakukan SETELAH file di-unzip, jadi file gradle sudah ada
       - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          # Kunci cache dibuat berdasarkan hash dari file gradle di dalam proyek
           key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/*.gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Build Cordova Project
+      - name: Build Debug APK
         run: |
           cd cordova-project
-          
           echo "Installing project dependencies..."
           npm install
-          
           echo "Adding Android platform..."
           cordova platform add android
-          
-          echo "Building Android APK..."
+          echo "Building DEBUG Android APK..."
+          # Cukup jalankan 'cordova build android' untuk debug
           cordova build android -- --gradleArg=--no-daemon
 
-      - name: Upload APK as Artifact
+      - name: Upload Debug APK as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: built-apk
-          path: cordova-project/platforms/android/app/build/outputs/apk/release/*.apk # <-- UBAH BARIS INI
+          name: debug-apk
+          # Path untuk APK debug berbeda (ada di folder 'debug')
+          path: cordova-project/platforms/android/app/build/outputs/apk/debug/*.apk
