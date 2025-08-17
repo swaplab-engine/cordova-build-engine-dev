@@ -9,9 +9,12 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    # --- PERBAIKAN DI SINI ---
+    # Berikan izin kepada job untuk menulis ke repositori (membuat rilis)
+    permissions:
+      contents: write
+    # -------------------------
     steps:
-      # Langkah-langkah sebelumnya tetap sama...
       - name: Checkout repository code
         uses: actions/checkout@v4
 
@@ -57,13 +60,6 @@ jobs:
           echo "Building DEBUG Android APK..."
           cordova build android -- --gradleArg=--no-daemon
       
-      # Hapus atau nonaktifkan langkah upload-artifact lama jika tidak diperlukan lagi
-      # - name: Upload Debug APK as Artifact
-      #   uses: actions/upload-artifact@v4
-      # ...
-
-      # --- LANGKAH BARU DIMULAI DARI SINI ---
-
       - name: Get APK path and name
         id: get_apk_info
         run: |
@@ -76,7 +72,7 @@ jobs:
         id: create_release
         uses: actions/create-release@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Token ini otomatis tersedia
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: build-${{ github.run_id }}
           release_name: Build Debug ${{ github.run_id }}
