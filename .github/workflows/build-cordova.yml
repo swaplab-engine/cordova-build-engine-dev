@@ -1,6 +1,6 @@
 # .github/workflows/build-cordova.yml
 
-name: Build and Release DEBUG APK
+name: Build and Upload DEBUG APK
 
 on:
   repository_dispatch:
@@ -9,11 +9,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # --- PERBAIKAN DI SINI ---
-    # Berikan izin kepada job untuk menulis ke repositori (membuat rilis)
     permissions:
-      contents: write
-    # -------------------------
+      contents: read # Izin 'write' tidak lagi diperlukan
+
     steps:
       - name: Checkout repository code
         uses: actions/checkout@v4
@@ -35,7 +33,6 @@ jobs:
       - name: Download and Unzip Project
         run: |
           ZIP_URL="${{ github.event.client_payload.url }}"
-          echo "Downloading project from $ZIP_URL"
           curl -L --retry 5 --retry-delay 2 -o cordovaProject.zip "$ZIP_URL"
           mkdir cordova-project
           unzip cordovaProject.zip -d cordova-project
@@ -53,50 +50,20 @@ jobs:
       - name: Build Debug APK
         run: |
           cd cordova-project
-          echo "Installing project dependencies..."
           npm install
-          echo "Adding Android platform..."
           cordova platform add android
-          echo "Building DEBUG Android APK..."
           cordova build android -- --gradleArg=--no-daemon
-      
-      - name: Get APK path and name
-        id: get_apk_info
+
+      # --- PERUBAHAN UTAMA: Ganti 'Create Release' dengan 'Upload to Server' ---
+      - name: Upload APK to Your Server
         run: |
+          # Temukan path file APK
           APK_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-          APK_NAME=$(basename "$APK_PATH")
-          echo "path=$APK_PATH" >> $GITHUB_OUTPUT
-          echo "name=$APK_NAME" >> $GITHUB_OUTPUT
-
-      - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: build-${{ github.run_id }}
-          release_name: Build Debug ${{ github.run_id }}
-          body: "APK build otomatis dari upload pada ${{ github.event.client_payload.url }}"
-          draft: false
-          prerelease: true
-
-      - name: Upload APK to Release
-        id: upload_asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ steps.get_apk_info.outputs.path }}
-          asset_name: ${{ steps.get_apk_info.outputs.name }}
-          asset_content_type: application/vnd.android.package-archive
-
-      - name: Notify Your Server
-        run: |
-          curl -X POST https://cordova.build.appjs.net/build-complete \
-          -H "Content-Type: application/json" \
-          -d '{
-            "buildId": "${{ github.event.client_payload.buildId }}",
-            "downloadUrl": "${{ steps.upload_asset.outputs.browser_download_url }}",
-            "secret": "${{ secrets.WEBHOOK_SECRET }}"
-          }'
+          echo "Uploading $APK_PATH to server..."
+          
+          # Gunakan curl untuk mengirim file sebagai multipart/form-data
+          curl -X POST \
+            -F "apkFile=@$APK_PATH" \
+            -F "buildId=${{ github.event.client_payload.buildId }}" \
+            -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
+            https://cordova.build.appjs.net/upload-result
