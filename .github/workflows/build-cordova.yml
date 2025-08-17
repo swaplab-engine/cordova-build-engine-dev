@@ -41,29 +41,16 @@ jobs:
       - name: Prepare for Release Build
         if: startsWith(github.event.client_payload.buildType, 'release')
         run: |
-          echo "Preparing for RELEASE build..."
           cd cordova-project
           KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
           curl -L -o release.jks "$KEYSTORE_URL"
-          
-          # Tentukan packageType berdasarkan buildType
           PACKAGE_TYPE="apk"
           if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
             PACKAGE_TYPE="bundle"
           fi
-          
-          echo "Creating build.json with packageType: $PACKAGE_TYPE"
           cat > build.json << EOF
           {
-            "android": {
-              "release": {
-                "keystore": "release.jks",
-                "storePassword": "${{ github.event.client_payload.keystorePassword }}",
-                "alias": "${{ github.event.client_payload.keyAlias }}",
-                "password": "${{ github.event.client_payload.keyPassword }}",
-                "packageType": "$PACKAGE_TYPE"
-              }
-            }
+            "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } }
           }
           EOF
 
@@ -82,20 +69,17 @@ jobs:
           cd cordova-project
           npm install
           cordova platform add android
-          
           if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
-            echo "Building DEBUG APK..."
             cordova build android -- --gradleArg=--no-daemon
           else
-            echo "Building RELEASE (${{ github.event.client_payload.buildType }})..."
             cordova build android --release -- --gradleArg=--no-daemon
           fi
 
       - name: Upload Build File to Your Server
         run: |
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
+          USER_ID="${{ github.event.client_payload.userId }}"
           ARTIFACT_PATH=""
-          
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
           elif [[ "$BUILD_TYPE" == "release-apk" ]]; then
@@ -104,23 +88,19 @@ jobs:
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
           fi
           
-          echo "Uploading $ARTIFACT_PATH to server..."
+          echo "Uploading $ARTIFACT_PATH to server for user $USER_ID..."
+          # --- PERUBAHAN URL DI SINI ---
           curl -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
             -F "buildType=$BUILD_TYPE" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
-            https://cordova.build.appjs.net/upload-result
+            https://cordova.build.appjs.net/upload-result/$USER_ID
 
       - name: Notify Server of Failure
         if: failure()
         run: |
-          echo "Build failed. Notifying server..."
           curl -X POST \
             -H "Content-Type: application/json" \
-            -d '{
-              "buildId": "${{ github.event.client_payload.buildId }}",
-              "errorUrl": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              "secret": "${{ secrets.WEBHOOK_SECRET }}"
-            }' \
+            -d '{ "buildId": "${{ github.event.client_payload.buildId }}", "errorUrl": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}", "secret": "${{ secrets.WEBHOOK_SECRET }}" }' \
             https://cordova.build.appjs.net/build-failed
