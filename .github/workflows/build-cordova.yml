@@ -47,7 +47,7 @@ jobs:
           cd cordova-project
           npm install
           cordova platform add android
-          cordova build android -- --gradleArg=--no-daemon
+          cordova build android --debug --gradleArg=--no-daemon
 
       - name: Upload APK to Your Server
         # Langkah ini hanya berjalan jika build berhasil
