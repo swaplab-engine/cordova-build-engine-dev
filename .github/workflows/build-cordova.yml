@@ -64,7 +64,7 @@ jobs:
           cordova platform add android
           
           echo "Building Android APK..."
-          cordova build android --release -- --gradleArg=--no-daemon
+          cordova build android -- --gradleArg=--no-daemon
 
       - name: Upload APK as Artifact
         uses: actions/upload-artifact@v4
