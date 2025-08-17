@@ -14,19 +14,18 @@ jobs:
       - name: Checkout repository code
         uses: actions/checkout@v4
 
-      # Menggunakan Node.js versi 20 sesuai persyaratan terbaru
       - name: Set up Node.js v20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # Menggunakan Java Development Kit (JDK) versi 17
+      # Setup JDK tanpa caching, karena file gradle belum ada
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'gradle'
+          # Hapus baris 'cache: gradle' dari sini karena file belum ada
 
       - name: Install Cordova CLI
         run: npm install -g cordova
@@ -41,6 +40,19 @@ jobs:
           mkdir cordova-project
           unzip cordovaProject.zip -d cordova-project
           
+      # LANGKAH BARU: Konfigurasi cache untuk Gradle
+      # Dilakukan SETELAH file di-unzip, jadi file gradle sudah ada
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          # Kunci cache dibuat berdasarkan hash dari file gradle di dalam proyek
+          key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/*.gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
       - name: Build Cordova Project
         run: |
           cd cordova-project
@@ -52,7 +64,7 @@ jobs:
           cordova platform add android
           
           echo "Building Android APK..."
-          cordova build android
+          cordova build android --release -- --gradleArg=--no-daemon
 
       - name: Upload APK as Artifact
         uses: actions/upload-artifact@v4
