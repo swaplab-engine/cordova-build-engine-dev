@@ -70,4 +70,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: built-apk
-          path: cordova-project/platforms/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          path: cordova-project/platforms/android/app/build/outputs/apk/release/*.apk # <-- UBAH BARIS INI
