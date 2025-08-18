@@ -14,7 +14,6 @@ jobs:
       - name: Dump client_payload to log
         run: echo "${{ toJSON(github.event.client_payload) }}"
 
-      # 1. Hapus 'cache: npm' dari sini karena package-lock.json belum ada
       - name: Set up Node.js v20
         uses: actions/setup-node@v4
         with:
@@ -26,12 +25,12 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # 2. Tambahkan cache manual untuk paket global npm (seperti cordova)
+      # PERUBAHAN 1: Kunci cache yang lebih stabil untuk paket global.
       - name: Cache global npm packages
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-global-${{ hashFiles('**/package-lock.json') }} # Kunci ini mungkin tidak ideal, tapi cukup
+          key: ${{ runner.os }}-npm-global-v1
           restore-keys: |
             ${{ runner.os }}-npm-global-
 
@@ -45,7 +44,6 @@ jobs:
           mkdir cordova-project
           unzip cordovaProject.zip -d cordova-project
 
-      # 3. Tambahkan cache manual untuk node_modules proyek SETELAH diunduh
       - name: Cache project dependencies (node_modules)
         uses: actions/cache@v4
         with:
@@ -54,9 +52,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-npm-project-
 
-      - name: Prepare Signing Configuration (build.json)
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/*.gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # PERUBAHAN 2: Menggabungkan persiapan dan build ke dalam satu langkah logis.
+      - name: Prepare, Install Dependencies, and Build Project
         run: |
           cd cordova-project
+
+          echo "Preparing signing configuration..."
           KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
           curl -L -o release.jks "$KEYSTORE_URL"
           PACKAGE_TYPE="apk"
@@ -69,21 +80,11 @@ jobs:
           }
           EOF
 
-      - name: Cache Gradle packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/*.gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Build Cordova Project
-        run: |
-          cd cordova-project
+          echo "Installing project dependencies..."
           # 'npm install' akan sangat cepat jika cache di atas berhasil
           npm install
+
+          echo "Building Cordova project..."
           cordova platform add android
           cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
 
