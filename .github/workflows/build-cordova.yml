@@ -14,13 +14,13 @@ jobs:
       - name: Dump client_payload to log
         run: echo "${{ toJSON(github.event.client_payload) }}"
 
-      - name: Checkout repository code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js v20
+      # Optimasi: Menggunakan cache 'npm'. Ini akan menyimpan cache baik untuk
+      # paket global (cordova) maupun node_modules proyek.
+      - name: Set up Node.js v20 with NPM Cache
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm' # <-- KUNCI OPTIMASI UTAMA
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -28,6 +28,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      # Langkah ini akan menjadi sangat cepat setelah cache dibuat
       - name: Install Cordova CLI
         run: npm install -g cordova
 
@@ -58,12 +59,14 @@ jobs:
           EOF
           cat build.json
 
+      # Optimasi: Cache untuk Gradle sudah ada dan ini sangat penting, jadi kita pertahankan.
       - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
+          # Kunci cache dibuat berdasarkan file gradle, ini sudah benar.
           key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/*.gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
@@ -71,9 +74,9 @@ jobs:
       - name: Build Cordova Project
         run: |
           cd cordova-project
+          # Langkah 'npm install' ini akan sangat cepat karena cache dari 'setup-node'
           npm install
           cordova platform add android
-          # Always use --release flag as we always provide a build.json
           cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
 
       - name: Upload Build File to Your Server
@@ -82,10 +85,9 @@ jobs:
           USER_ID="${{ github.event.client_payload.userId }}"
           ARTIFACT_PATH=""
 
-          # Since we always build with --release, the output is always in the 'release' folder.
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
-          else # This covers both 'release-apk' and 'debug-apk'
+          else
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
           fi
           
