@@ -38,21 +38,25 @@ jobs:
           mkdir cordova-project
           unzip cordovaProject.zip -d cordova-project
 
-      - name: Prepare for Release Build
-        if: startsWith(github.event.client_payload.buildType, 'release')
+      - name: Prepare Signing Configuration (build.json)
         run: |
           cd cordova-project
           KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
+          echo "Downloading keystore from $KEYSTORE_URL"
           curl -L -o release.jks "$KEYSTORE_URL"
+
           PACKAGE_TYPE="apk"
           if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
             PACKAGE_TYPE="bundle"
           fi
+          
+          echo "Creating build.json..."
           cat > build.json << EOF
           {
             "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } }
           }
           EOF
+          cat build.json
 
       - name: Cache Gradle packages
         uses: actions/cache@v4
@@ -69,27 +73,28 @@ jobs:
           cd cordova-project
           npm install
           cordova platform add android
-          if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
-            cordova build android -- --gradleArg=--no-daemon
-          else
-            cordova build android --release -- --gradleArg=--no-daemon
-          fi
+          # Always use --release flag as we always provide a build.json
+          cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
 
       - name: Upload Build File to Your Server
         run: |
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
           ARTIFACT_PATH=""
+
+          # Since we always build with --release, the output is always in the 'release' folder.
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
-          elif [[ "$BUILD_TYPE" == "release-apk" ]]; then
+          else # This covers both 'release-apk' and 'debug-apk'
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          else
-            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
           fi
           
+          if [ -z "$ARTIFACT_PATH" ]; then
+            echo "::error::Build artifact not found!"
+            exit 1
+          fi
+
           echo "Uploading $ARTIFACT_PATH to server for user $USER_ID..."
-          # --- PERUBAHAN URL DI SINI ---
           curl -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
