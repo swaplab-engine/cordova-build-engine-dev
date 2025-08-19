@@ -25,7 +25,6 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # PERUBAHAN 1: Kunci cache yang lebih stabil untuk paket global.
       - name: Cache global npm packages
         uses: actions/cache@v4
         with:
@@ -62,33 +61,33 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      # PERUBAHAN 2: Menggabungkan persiapan dan build ke dalam satu langkah logis.
       - name: Prepare, Install Dependencies, and Build Project
         run: |
           cd cordova-project
-
-          echo "Preparing signing configuration..."
-          KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
-          curl -L -o release.jks "$KEYSTORE_URL"
-          PACKAGE_TYPE="apk"
-          if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
-            PACKAGE_TYPE="bundle"
-          fi
-          cat > build.json << EOF
           {
-            "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } }
-          }
-          EOF
+            echo "Preparing signing configuration..."
+            KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
+            curl -L -o release.jks "$KEYSTORE_URL"
+            PACKAGE_TYPE="apk"
+            if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
+              PACKAGE_TYPE="bundle"
+            fi
+            cat > build.json << EOF
+            {
+              "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } }
+            }
+            EOF
 
-          echo "Installing project dependencies..."
-          # 'npm install' akan sangat cepat jika cache di atas berhasil
-          npm install
+            echo "Installing project dependencies..."
+            npm install
 
-          echo "Building Cordova project..."
-          cordova platform add android
-          cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+            echo "Building Cordova project..."
+            cordova platform add android
+            cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+          } > build_log.txt 2>&1
 
       - name: Upload Build File to Your Server
+        if: success()
         run: |
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
@@ -109,10 +108,23 @@ jobs:
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             https://cordova.build.appjs.net/upload-result/$USER_ID
 
-      - name: Notify Server of Failure
+      - name: Upload Error Log to Server
         if: failure()
         run: |
+          USER_ID="${{ github.event.client_payload.userId }}"
+          LOG_FILE="cordova-project/build_log.txt"
+
+          # PERUBAHAN DI SINI: Pesan darurat sekarang bersifat generik dan tidak menyertakan URL GitHub.
+          if [ ! -f "$LOG_FILE" ]; then
+            echo "Build gagal pada tahap sangat awal." > $LOG_FILE
+            echo "Kemungkinan terjadi kesalahan saat mengunduh atau mempersiapkan dependensi awal." >> $LOG_FILE
+            echo "Tidak ada log build detail yang dapat dihasilkan." >> $LOG_FILE
+            echo "Mohon periksa kembali file proyek Anda (config.xml, package.json) dan coba lagi." >> $LOG_FILE
+          fi
+          
+          echo "Uploading error log to server..."
           curl -X POST \
-            -H "Content-Type: application/json" \
-            -d '{ "buildId": "${{ github.event.client_payload.buildId }}", "errorUrl": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}", "secret": "${{ secrets.WEBHOOK_SECRET }}" }' \
-            https://cordova.build.appjs.net/build-failed
+            -F "logFile=@$LOG_FILE" \
+            -F "buildId=${{ github.event.client_payload.buildId }}" \
+            -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
+            https://cordova.build.appjs.net/upload-log/$USER_ID
