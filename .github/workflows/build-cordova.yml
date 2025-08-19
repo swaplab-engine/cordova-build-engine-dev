@@ -128,9 +128,9 @@ jobs:
           
           sed \
             -e 's|https?://cordova\.build\.appjs\.net[^ ]*|[URL_SERVER_DIHAPUS]|g' \
-            -e 's|/home/runner/work/[^ ]*|[PATH_RUNNER_DIHAPUS]|g' \
-            -e 's|/opt/hostedtoolcache/[^ ]*|[PATH_CACHE_DIHAPUS]|g' \
-            -e 's|[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}|[IP_DIHAPUS]|g' \
+            -e 's|/home/runner/work/[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
+            -e 's|/opt/hostedtoolcache/[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
+            -e 's|[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}|[User_privacy_security_PATH_is_hidden]|g' \
             "$LOG_FILE" > "$REDACTED_LOG_FILE"
 
           echo "Uploading redacted error log to server..."
