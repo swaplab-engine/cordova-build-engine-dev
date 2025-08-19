@@ -51,6 +51,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-npm-project-
 
+      # KEMBALI KE LANGKAH TERPISAH: Ini adalah bagian persiapan yang stabil
+      - name: Prepare Signing Configuration
+        run: |
+          cd cordova-project
+          KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
+          curl -L -o release.jks "$KEYSTORE_URL"
+          PACKAGE_TYPE="apk"
+          if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
+            PACKAGE_TYPE="bundle"
+          fi
+          cat > build.json << EOF
+          {
+            "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } }
+          }
+          EOF
+
       - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
@@ -61,26 +77,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Prepare, Install Dependencies, and Build Project
+      # FOKUS PENANGKAPAN ERROR: Redirection (> build_log.txt) hanya diterapkan di sini
+      - name: Install Dependencies and Build Project
         run: |
           cd cordova-project
           {
-            echo "Preparing signing configuration..."
-            KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
-            curl -L -o release.jks "$KEYSTORE_URL"
-            PACKAGE_TYPE="apk"
-            if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
-              PACKAGE_TYPE="bundle"
-            fi
-            cat > build.json << EOF
-            {
-              "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } }
-            }
-            EOF
-
             echo "Installing project dependencies..."
             npm install
-
+            
             echo "Building Cordova project..."
             cordova platform add android
             cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
@@ -113,16 +117,12 @@ jobs:
         run: |
           USER_ID="${{ github.event.client_payload.userId }}"
           LOG_FILE="cordova-project/build_log.txt"
-
-          # PERUBAHAN DI SINI: Pesan darurat sekarang bersifat generik dan tidak menyertakan URL GitHub.
           if [ ! -f "$LOG_FILE" ]; then
             echo "Build gagal pada tahap sangat awal." > $LOG_FILE
             echo "Kemungkinan terjadi kesalahan saat mengunduh atau mempersiapkan dependensi awal." >> $LOG_FILE
             echo "Tidak ada log build detail yang dapat dihasilkan." >> $LOG_FILE
             echo "Mohon periksa kembali file proyek Anda (config.xml, package.json) dan coba lagi." >> $LOG_FILE
           fi
-          
-          echo "Uploading error log to server..."
           curl -X POST \
             -F "logFile=@$LOG_FILE" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
