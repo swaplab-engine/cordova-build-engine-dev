@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # PERBARUAN: Tambahkan batas waktu eksekusi untuk job ini
+    timeout-minutes: 14
     permissions:
       contents: read
 
@@ -113,7 +115,6 @@ jobs:
           fi
 
           echo "Uploading artifact: $ARTIFACT_PATH"
-          # DIKEMBALIKAN: Menggunakan URL hardcoded sesuai kode asli Anda yang berfungsi
           curl --fail -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
             -F "buildId=${{ env.BUILD_ID }}" \
@@ -141,7 +142,6 @@ jobs:
             "$LOG_FILE" > "$REDACTED_LOG_FILE"
 
           echo "Uploading redacted error log to server..."
-          # DIKEMBALIKAN: Menggunakan URL hardcoded sesuai kode asli Anda yang berfungsi
           curl --fail -X POST \
             -F "logFile=@$REDACTED_LOG_FILE" \
             -F "buildId=${{ env.BUILD_ID }}" \
