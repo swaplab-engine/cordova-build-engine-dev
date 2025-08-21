@@ -30,8 +30,6 @@ jobs:
         with:
           path: ~/.npm
           key: ${{ runner.os }}-npm-global-v1
-          restore-keys: |
-            ${{ runner.os }}-npm-global-
 
       - name: Install Cordova CLI
         run: npm install -g cordova
@@ -39,7 +37,7 @@ jobs:
       - name: Download and Unzip Project
         run: |
           ZIP_URL="${{ github.event.client_payload.projectUrl }}"
-          curl -L -o cordovaProject.zip "$ZIP_URL"
+          curl -L --retry 5 --retry-delay 5 -o cordovaProject.zip "$ZIP_URL"
           mkdir cordova-project
           unzip cordovaProject.zip -d cordova-project
 
@@ -48,14 +46,13 @@ jobs:
         with:
           path: cordova-project/node_modules
           key: ${{ runner.os }}-npm-project-${{ hashFiles('cordova-project/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-project-
 
-      - name: Prepare Signing Configuration
+      - name: Prepare Signing Configuration for Release
+        if: startsWith(github.event.client_payload.buildType, 'release')
         run: |
           cd cordova-project
           KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
-          curl -L -o release.jks "$KEYSTORE_URL"
+          curl -L --retry 5 --retry-delay 5 -o release.jks "$KEYSTORE_URL"
           PACKAGE_TYPE="apk"
           if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
             PACKAGE_TYPE="bundle"
@@ -72,9 +69,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/*.gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+          key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
 
       - name: Install Dependencies and Build Project
         run: |
@@ -82,10 +77,17 @@ jobs:
           {
             echo "Installing project dependencies..."
             npm install
-            
-            echo "Building Cordova project..."
+
+            echo "Adding Android platform..."
             cordova platform add android
-            cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+
+            BUILD_TYPE="${{ github.event.client_payload.buildType }}"
+            echo "Building Cordova project for: $BUILD_TYPE"
+            if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
+              cordova build android --debug -- --gradleArg=--no-daemon
+            else
+              cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+            fi
           } > build_log.txt 2>&1
 
       - name: Upload Build File to Your Server
@@ -96,20 +98,26 @@ jobs:
           ARTIFACT_PATH=""
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
-          else
+          elif [[ "$BUILD_TYPE" == "release-apk" ]]; then
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          else # debug-apk
+            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
           fi
+
           if [ -z "$ARTIFACT_PATH" ]; then
             echo "::error::Build artifact not found!"
             exit 1
           fi
+
+          echo "Uploading artifact: $ARTIFACT_PATH"
           curl -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
             -F "buildType=$BUILD_TYPE" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
-            https://cordova.build.appjs.net/upload-result/$USER_ID
+            ${{ secrets.APP_BASE_URL }}/upload-result/$USER_ID
 
+      # DIKEMBALIKAN: Logika filter log sensitif Anda
       - name: Filter and Upload Error Log
         if: failure()
         run: |
@@ -120,8 +128,6 @@ jobs:
           if [ ! -f "$LOG_FILE" ]; then
             echo "Build gagal pada tahap sangat awal." > "$LOG_FILE"
             echo "Kemungkinan terjadi kesalahan saat mengunduh atau mempersiapkan dependensi awal." >> "$LOG_FILE"
-            echo "Tidak ada log build detail yang dapat dihasilkan." >> "$LOG_FILE"
-            echo "Mohon periksa kembali file proyek Anda (config.xml, package.json) dan coba lagi." >> "$LOG_FILE"
           fi
           
           echo "Filtering sensitive information from log file..."
@@ -138,4 +144,4 @@ jobs:
             -F "logFile=@$REDACTED_LOG_FILE" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
-            https://cordova.build.appjs.net/upload-log/$USER_ID
+            ${{ secrets.APP_BASE_URL }}/upload-log/$USER_ID
