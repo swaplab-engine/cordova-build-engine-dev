@@ -10,6 +10,10 @@ jobs:
     permissions:
       contents: read
 
+    # BARU: Gunakan nilai dari client_payload untuk mengatur timeout
+    # Konversi milidetik ke menit, bulatkan ke atas.
+    timeout-minutes: ${{ ceil(github.event.client_payload.maximumBuildTime / 60000) }}
+
     steps:
       - name: Dump client_payload to log
         run: echo "${{ toJSON(github.event.client_payload) }}"
