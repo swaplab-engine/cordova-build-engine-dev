@@ -7,17 +7,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # PERBARUAN: Tambahkan batas waktu eksekusi untuk job ini
-    timeout-minutes: 14
     permissions:
       contents: read
 
-    env:
-      BUILD_TYPE: ${{ github.event.client_payload.buildType }}
-      USER_ID: ${{ github.event.client_payload.userId }}
-      BUILD_ID: ${{ github.event.client_payload.buildId }}
-      PROJECT_DIR: cordova-project
-      
     steps:
       - name: Dump client_payload to log
         run: echo "${{ toJSON(github.event.client_payload) }}"
@@ -38,6 +30,8 @@ jobs:
         with:
           path: ~/.npm
           key: ${{ runner.os }}-npm-global-v1
+          restore-keys: |
+            ${{ runner.os }}-npm-global-
 
       - name: Install Cordova CLI
         run: npm install -g cordova
@@ -45,24 +39,25 @@ jobs:
       - name: Download and Unzip Project
         run: |
           ZIP_URL="${{ github.event.client_payload.projectUrl }}"
-          curl -L --retry 5 --retry-delay 5 -o cordovaProject.zip "$ZIP_URL"
-          mkdir -p ${{ env.PROJECT_DIR }}
-          unzip cordovaProject.zip -d ${{ env.PROJECT_DIR }}
+          curl -L -o cordovaProject.zip "$ZIP_URL"
+          mkdir cordova-project
+          unzip cordovaProject.zip -d cordova-project
 
       - name: Cache project dependencies (node_modules)
         uses: actions/cache@v4
         with:
-          path: ${{ env.PROJECT_DIR }}/node_modules
-          key: ${{ runner.os }}-npm-project-${{ hashFiles(format('{0}/package-lock.json', env.PROJECT_DIR)) }}
+          path: cordova-project/node_modules
+          key: ${{ runner.os }}-npm-project-${{ hashFiles('cordova-project/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-project-
 
-      - name: Prepare Signing Configuration for Release
-        if: startsWith(env.BUILD_TYPE, 'release')
+      - name: Prepare Signing Configuration
         run: |
-          cd ${{ env.PROJECT_DIR }}
+          cd cordova-project
           KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
-          curl -L --retry 5 --retry-delay 5 -o release.jks "$KEYSTORE_URL"
+          curl -L -o release.jks "$KEYSTORE_URL"
           PACKAGE_TYPE="apk"
-          if [[ "${{ env.BUILD_TYPE }}" == "release-aab" ]]; then
+          if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
             PACKAGE_TYPE="bundle"
           fi
           cat > build.json << EOF
@@ -77,73 +72,70 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles(format('{0}/**/*.gradle*', env.PROJECT_DIR), format('{0}/**/gradle-wrapper.properties', env.PROJECT_DIR)) }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/*.gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
       - name: Install Dependencies and Build Project
         run: |
-          cd ${{ env.PROJECT_DIR }}
+          cd cordova-project
           {
             echo "Installing project dependencies..."
             npm install
-
-            echo "Adding Android platform..."
+            
+            echo "Building Cordova project..."
             cordova platform add android
-
-            echo "Building Cordova project for: ${{ env.BUILD_TYPE }}"
-            if [[ "${{ env.BUILD_TYPE }}" == "debug-apk" ]]; then
-              cordova build android --debug -- --gradleArg=--no-daemon
-            else
-              cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
-            fi
+            cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
           } > build_log.txt 2>&1
 
       - name: Upload Build File to Your Server
         if: success()
         run: |
+          BUILD_TYPE="${{ github.event.client_payload.buildType }}"
+          USER_ID="${{ github.event.client_payload.userId }}"
           ARTIFACT_PATH=""
-          if [[ "${{ env.BUILD_TYPE }}" == "release-aab" ]]; then
-            ARTIFACT_PATH=$(find ${{ env.PROJECT_DIR }}/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
-          elif [[ "${{ env.BUILD_TYPE }}" == "release-apk" ]]; then
-            ARTIFACT_PATH=$(find ${{ env.PROJECT_DIR }}/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          else # debug-apk
-            ARTIFACT_PATH=$(find ${{ env.PROJECT_DIR }}/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          if [[ "$BUILD_TYPE" == "release-aab" ]]; then
+            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+          else
+            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
           fi
-
           if [ -z "$ARTIFACT_PATH" ]; then
             echo "::error::Build artifact not found!"
             exit 1
           fi
-
-          echo "Uploading artifact: $ARTIFACT_PATH"
-          curl --fail -X POST \
+          curl -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
-            -F "buildId=${{ env.BUILD_ID }}" \
-            -F "buildType=${{ env.BUILD_TYPE }}" \
+            -F "buildId=${{ github.event.client_payload.buildId }}" \
+            -F "buildType=$BUILD_TYPE" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
-            "https://cordova.build.appjs.net/upload-result/${{ env.USER_ID }}"
+            https://cordova.build.appjs.net/upload-result/$USER_ID
 
       - name: Filter and Upload Error Log
         if: failure()
         run: |
-          LOG_FILE="${{ env.PROJECT_DIR }}/build_log.txt"
-          REDACTED_LOG_FILE="${{ env.PROJECT_DIR }}/build_log_redacted.txt"
+          USER_ID="${{ github.event.client_payload.userId }}"
+          LOG_FILE="cordova-project/build_log.txt"
+          REDACTED_LOG_FILE="cordova-project/build_log_redacted.txt"
 
           if [ ! -f "$LOG_FILE" ]; then
             echo "Build gagal pada tahap sangat awal." > "$LOG_FILE"
+            echo "Kemungkinan terjadi kesalahan saat mengunduh atau mempersiapkan dependensi awal." >> "$LOG_FILE"
+            echo "Tidak ada log build detail yang dapat dihasilkan." >> "$LOG_FILE"
+            echo "Mohon periksa kembali file proyek Anda (config.xml, package.json) dan coba lagi." >> "$LOG_FILE"
           fi
           
           echo "Filtering sensitive information from log file..."
           
           sed \
-            -e 's|https?://cordova\.build\.appjs\.net[^ ]*|[URL_REDACTED]|g' \
-            -e 's|/home/runner/work/[^ ]*|[PATH_REDACTED]|g' \
-            -e 's|/opt/hostedtoolcache/[^ ]*|[PATH_REDACTED]|g' \
-            -e 's|[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}|[IP_REDACTED]|g' \
+            -e 's|https?://cordova\.build\.appjs\.net[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
+            -e 's|/home/runner/work/[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
+            -e 's|/opt/hostedtoolcache/[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
+            -e 's|[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}|[User_privacy_security_PATH_is_hidden]|g' \
             "$LOG_FILE" > "$REDACTED_LOG_FILE"
 
           echo "Uploading redacted error log to server..."
-          curl --fail -X POST \
+          curl -X POST \
             -F "logFile=@$REDACTED_LOG_FILE" \
-            -F "buildId=${{ env.BUILD_ID }}" \
-            -H "X-Build-secret: ${{ secrets.WEBHOOK_SECRET }}" \
-            "https://cordova.build.appjs.net/upload-log/${{ env.USER_ID }}"
+            -F "buildId=${{ github.event.client_payload.buildId }}" \
+            -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
+            https://cordova.build.appjs.net/upload-log/$USER_ID
