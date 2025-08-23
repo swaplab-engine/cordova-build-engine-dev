@@ -1,4 +1,4 @@
-name: Ionic Capacitor Build (Debug/Release APK/AAB)
+name: Ionic Capacitor Build (APK/AAB)
 
 on:
   repository_dispatch:
@@ -54,64 +54,38 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
       
-      - name: Prepare, Install, and Build Project
+      - name: Run Build Script
+        working-directory: ./capacitor-project
+        env:
+          # Mengatur environment variables untuk digunakan oleh build_android.sh
+          KEYSTORE_URL: ${{ github.event.client_payload.keystoreUrl }}
+          KEYSTORE_PASSWORD: ${{ github.event.client_payload.keystorePassword }}
+          KEY_ALIAS: ${{ github.event.client_payload.keyAlias }}
+          KEY_PASSWORD: ${{ github.event.client_payload.keyPassword }}
+          BUILD_TYPE: ${{ github.event.client_payload.buildType }}
         run: |
-          cd capacitor-project
-          {
-            echo "Installing project dependencies..."
-            npm install
-
-            echo "Adding Android platform to create the directory..."
-            npx cap add android
-
-            echo "Preparing signing configuration..."
-            KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
-            curl -L -o android/app/release.jks "$KEYSTORE_URL"
-
-            # Buat file gradle.properties
-            cat > android/gradle.properties <<EOF
-            android.useAndroidX=true
-            android.enableJetifier=true
-            MYAPP_RELEASE_STORE_FILE=release.jks
-            MYAPP_RELEASE_STORE_PASSWORD=${{ github.event.client_payload.keystorePassword }}
-            MYAPP_RELEASE_KEY_ALIAS=${{ github.event.client_payload.keyAlias }}
-            MYAPP_RELEASE_KEY_PASSWORD=${{ github.event.client_payload.keyPassword }}
-EOF
-
-            echo "Syncing project..."
-            npx cap sync android
-            
-            echo "Building Capacitor project..."
-            cd android
-            chmod +x ./gradlew
-            
-            if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
-              echo "Building AAB (release)..."
-              ./gradlew bundleRelease --no-daemon
-            else
-              echo "Building APK (release)..."
-              ./gradlew assembleRelease --no-daemon
-            fi
-          } > build_log.txt 2>&1
+          # Menyalin skrip build ke dalam direktori kerja
+          cp ../.github/scripts/build_android.sh .
+          chmod +x build_android.sh
+          # Menjalankan skrip dan menyimpan lognya
+          ./build_android.sh > build_log.txt 2>&1
 
       - name: Upload Build File to Your Server
         if: success()
         run: |
+          # ... (Langkah ini tidak berubah, salin dari versi sebelumnya)
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
           ARTIFACT_PATH=""
-
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then
             ARTIFACT_PATH=$(find capacitor-project/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
           else
             ARTIFACT_PATH=$(find capacitor-project/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
           fi
-
           if [ -z "$ARTIFACT_PATH" ]; then
             echo "::error::Build artifact not found!"
             exit 1
           fi
-
           curl -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
@@ -122,24 +96,19 @@ EOF
       - name: Filter and Upload Error Log
         if: failure()
         run: |
+          # ... (Langkah ini tidak berubah, salin dari versi sebelumnya)
           USER_ID="${{ github.event.client_payload.userId }}"
           LOG_FILE="capacitor-project/build_log.txt"
           REDACTED_LOG_FILE="capacitor-project/build_log_redacted.txt"
-
           if [ ! -f "$LOG_FILE" ]; then
             echo "Build gagal pada tahap sangat awal." > "$LOG_FILE"
           fi
-          
-          echo "Filtering sensitive information from log file..."
-          
           sed \
             -e 's|https?://cordova\.build\.appjs\.net[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
             -e 's|/home/runner/work/[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
             -e 's|/opt/hostedtoolcache/[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
             -e 's|[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}|[User_privacy_security_PATH_is_hidden]|g' \
             "$LOG_FILE" > "$REDACTED_LOG_FILE"
-
-          echo "Uploading redacted error log to server..."
           curl -X POST \
             -F "logFile=@$REDACTED_LOG_FILE" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
