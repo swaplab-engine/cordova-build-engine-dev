@@ -4,19 +4,21 @@ on:
   repository_dispatch:
     types: [trigger-build]
 
+# BARU: Definisikan env untuk versi Gradle default
+env:
+  DEFAULT_GRADLE_VERSION: "8.2.1"
+
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
     timeout-minutes: ${{ github.event.client_payload.timeoutMinutes }}
 
     steps:
       - name: Dump client_payload to log
         run: echo "${{ toJSON(github.event.client_payload) }}"
 
-      # BARU: Catat waktu mulai build untuk menghitung durasi
       - name: Record start time
         run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
 
@@ -25,11 +27,13 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Set up JDK 17
+      # DIPERBARUI: Gunakan versi Gradle yang sudah didefinisikan
+      - name: Set up JDK 17 and Gradle
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+          gradle-version: ${{ env.DEFAULT_GRADLE_VERSION }}
 
       - name: Cache global npm packages
         uses: actions/cache@v4
@@ -72,13 +76,14 @@ jobs:
           }
           EOF
 
+      # DIPERBARUI: Tambahkan versi Gradle ke cache key
       - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/*.gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-${{ env.DEFAULT_GRADLE_VERSION }}-${{ hashFiles('cordova-project/**/*.gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
 
@@ -97,6 +102,7 @@ jobs:
       - name: Upload Build File to Your Server
         if: success()
         run: |
+          # (Tidak ada perubahan di bagian ini)
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
           ARTIFACT_PATH=""
@@ -116,7 +122,8 @@ jobs:
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             https://cordova.build.appjs.net/upload-result/$USER_ID
 
-      - name: Filter and Upload Error Log
+      # DIPERBARUI: Upload log mentah dan log terfilter saat gagal
+      - name: Handle Build Failure
         if: failure()
         run: |
           USER_ID="${{ github.event.client_payload.userId }}"
@@ -127,8 +134,14 @@ jobs:
             echo "Build gagal pada tahap sangat awal." > "$LOG_FILE"
           fi
           
-          echo "Filtering sensitive information from log file..."
+          echo "Uploading UNFILTERED raw log for admin..."
+          curl -X POST \
+            -F "logFile=@$LOG_FILE" \
+            -F "buildId=${{ github.event.client_payload.buildId }}" \
+            -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
+            https://cordova.build.appjs.net/upload-unfiltered-log/$USER_ID
           
+          echo "Filtering sensitive information from log file for user..."
           sed \
             -e 's|https?://cordova\.build\.appjs\.net[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
             -e 's|/home/runner/work/[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
@@ -136,17 +149,17 @@ jobs:
             -e 's|[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}|[User_privacy_security_PATH_is_hidden]|g' \
             "$LOG_FILE" > "$REDACTED_LOG_FILE"
 
-          echo "Uploading redacted error log to server..."
+          echo "Uploading REDACTED error log to server for user..."
           curl -X POST \
             -F "logFile=@$REDACTED_LOG_FILE" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             https://cordova.build.appjs.net/upload-log/$USER_ID
 
-      # BARU: Laporkan status akhir dan durasi build
       - name: Report Build Duration and Status
-        if: always() # Pastikan langkah ini selalu berjalan, baik sukses maupun gagal
+        if: always()
         run: |
+          # (Tidak ada perubahan di bagian ini)
           end_time=$(date +%s)
           duration=$((end_time - start_time))
           USER_ID="${{ github.event.client_payload.userId }}"
