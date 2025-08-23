@@ -26,7 +26,6 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
       
-      # BARU: Instal Capacitor CLI secara global
       - name: Install Ionic and Capacitor CLI
         run: npm install -g @ionic/cli @capacitor/cli
 
@@ -37,7 +36,6 @@ jobs:
           mkdir capacitor-project
           unzip capacitorProject.zip -d capacitor-project
 
-      # Cache dependensi node_modules tetap sama
       - name: Cache project dependencies (node_modules)
         uses: actions/cache@v4
         with:
@@ -46,24 +44,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-npm-project-
 
-      # BARU: Cara penandatanganan (signing) untuk Capacitor
-      - name: Prepare Signing Configuration for Capacitor
-        run: |
-          cd capacitor-project
-          KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
-          curl -L -o android/app/release.jks "$KEYSTORE_URL"
-
-          # Buat file gradle.properties untuk menyimpan kredensial keystore
-          cat > android/gradle.properties << EOF
-          android.useAndroidX=true
-          android.enableJetifier=true
-          MYAPP_RELEASE_STORE_FILE=release.jks
-          MYAPP_RELEASE_STORE_PASSWORD=${{ github.event.client_payload.keystorePassword }}
-          MYAPP_RELEASE_KEY_ALIAS=${{ github.event.client_payload.keyAlias }}
-          MYAPP_RELEASE_KEY_PASSWORD=${{ github.event.client_payload.keyPassword }}
-          EOF
-
-      # Cache Gradle tetap sama
       - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
@@ -74,16 +54,31 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
       
-      # BARU: Langkah build untuk Capacitor
-      - name: Install Dependencies and Build Project
+      - name: Prepare, Install, and Build Project
         run: |
           cd capacitor-project
           {
             echo "Installing project dependencies..."
             npm install
 
-            echo "Adding Android platform..."
+            echo "Adding Android platform to create the directory..."
+            # PENTING: Perintah ini membuat folder 'android'
             npx cap add android
+
+            # Sekarang folder 'android' sudah ada, kita bisa menyimpan keystore
+            echo "Preparing signing configuration..."
+            KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
+            curl -L -o android/app/release.jks "$KEYSTORE_URL"
+
+            # Buat file gradle.properties untuk signing
+            cat > android/gradle.properties << EOF
+            android.useAndroidX=true
+            android.enableJetifier=true
+            MYAPP_RELEASE_STORE_FILE=release.jks
+            MYAPP_RELEASE_STORE_PASSWORD=${{ github.event.client_payload.keystorePassword }}
+            MYAPP_RELEASE_KEY_ALIAS=${{ github.event.client_payload.keyAlias }}
+            MYAPP_RELEASE_KEY_PASSWORD=${{ github.event.client_payload.keyPassword }}
+            EOF
 
             echo "Syncing project..."
             npx cap sync android
@@ -102,7 +97,6 @@ jobs:
             fi
           } > build_log.txt 2>&1
 
-      # BARU: Lokasi artefak build di Capacitor
       - name: Upload Build File to Your Server
         if: success()
         run: |
@@ -128,12 +122,9 @@ jobs:
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             https://cordova.build.appjs.net/upload-result/$USER_ID
 
-      # Langkah upload log error tetap sama
       - name: Filter and Upload Error Log
         if: failure()
         run: |
-          # ... (salin dan tempel langkah upload log error Anda di sini)
-          # Kode ini tidak perlu diubah.
           USER_ID="${{ github.event.client_payload.userId }}"
           LOG_FILE="capacitor-project/build_log.txt"
           REDACTED_LOG_FILE="capacitor-project/build_log_redacted.txt"
