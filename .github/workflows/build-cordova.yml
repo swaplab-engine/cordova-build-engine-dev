@@ -1,4 +1,4 @@
-name: Ionic Capacitor Build (APK/AAB)
+name: Capacitor Android Build (Debug/Release APK/AAB)
 
 on:
   repository_dispatch:
@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
+    # ambil timeout dari client_payload seperti workflow Cordova kamu
     timeout-minutes: ${{ github.event.client_payload.timeoutMinutes }}
 
     steps:
@@ -23,27 +25,72 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
           distribution: 'temurin'
-      
-      # 1. Mengganti Cordova CLI dengan Ionic & Capacitor CLI
-      - name: Install Ionic and Capacitor CLI
-        run: npm install -g @ionic/cli @capacitor/cli
+          java-version: '17'
+
+      - name: Cache global npm packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-global-v1
+          restore-keys: |
+            ${{ runner.os }}-npm-global-
 
       - name: Download and Unzip Project
         run: |
           ZIP_URL="${{ github.event.client_payload.projectUrl }}"
-          curl -L -o capacitorProject.zip "$ZIP_URL"
-          mkdir capacitor-project
-          unzip capacitorProject.zip -d capacitor-project
+          curl -L -o project.zip "$ZIP_URL"
+          mkdir app
+          unzip -q project.zip -d app
 
       - name: Cache project dependencies (node_modules)
         uses: actions/cache@v4
         with:
-          path: capacitor-project/node_modules
-          key: ${{ runner.os }}-npm-project-${{ hashFiles('capacitor-project/package-lock.json') }}
+          path: app/node_modules
+          key: ${{ runner.os }}-npm-project-${{ hashFiles('app/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-npm-project-
+
+      - name: Install project dependencies
+        working-directory: app
+        run: |
+          echo "Installing project dependencies..."
+          npm ci
+
+      - name: Build web assets (if present) and ensure Capacitor deps
+        working-directory: app
+        run: |
+          # run build only if script exists
+          npm run build --if-present
+
+          # ensure Capacitor CLI/core are available (if project didn't include them)
+          # prefer project's local @capacitor/cli, but install fallback dev deps if missing
+          if ! node -e "require('fs').existsSync('node_modules/@capacitor/cli')"; then
+            npm install --no-audit --no-fund --save-dev @capacitor/cli @capacitor/core @capacitor/android
+          fi
+
+      - name: Add / Sync Android native project (only if missing or to update)
+        working-directory: app
+        run: |
+          # if android folder not present, create it; otherwise sync (copy web + plugins)
+          if [ ! -d "./android" ]; then
+            npx cap add android
+          fi
+          # copy web assets and update native projects & plugins
+          npx cap sync android
+          # make sure gradlew is executable later
+          ls -la android || true
+
+      - name: Prepare Signing Keystore (release builds only)
+        if: ${{ github.event.client_payload.buildType != 'debug' }}
+        working-directory: app
+        run: |
+          cd android
+          KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
+          # download keystore to android/release.jks
+          curl -L -o release.jks "$KEYSTORE_URL"
+          chmod 600 release.jks
+          cd ..
 
       - name: Cache Gradle packages
         uses: actions/cache@v4
@@ -51,71 +98,69 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('capacitor-project/android/**/*.gradle*', 'capacitor-project/android/**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('app/android/**/gradle-wrapper.properties', 'app/android/**/.gradle/**') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
-      
-      # 2. Menggabungkan instalasi, signing, dan build dalam satu langkah
-      - name: Install Dependencies, Prepare Signing, and Build
+
+      - name: Build Android (Gradle)
+        working-directory: app
         run: |
-          cd capacitor-project
-          {
-            echo "Installing project dependencies..."
-            npm install
+          cd android
+          chmod +x ./gradlew || true
 
-            echo "Adding Android platform..."
-            # Perintah ini membuat folder 'android'
-            npx cap add android
+          BUILD_TYPE="${{ github.event.client_payload.buildType }}"
+          echo "Selected build type: $BUILD_TYPE"
 
-            echo "Preparing signing configuration..."
-            KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
-            # Menyimpan keystore di dalam folder android/app yang sudah dibuat
-            curl -L -o android/app/release.jks "$KEYSTORE_URL"
+          # debug build (no signing)
+          if [[ "$BUILD_TYPE" == "debug" ]]; then
+            ./gradlew assembleDebug --no-daemon
+            exit 0
+          fi
 
-            # Membuat gradle.properties untuk signing, bukan build.json
-            cat > android/gradle.properties <<EOF
-            android.useAndroidX=true
-            android.enableJetifier=true
-            MYAPP_RELEASE_STORE_FILE=release.jks
-            MYAPP_RELEASE_STORE_PASSWORD=${{ github.event.client_payload.keystorePassword }}
-            MYAPP_RELEASE_KEY_ALIAS=${{ github.event.client_payload.keyAlias }}
-            MYAPP_RELEASE_KEY_PASSWORD=${{ github.event.client_payload.keyPassword }}
-EOF
+          # release builds (apk or aab). Kita memasukkan signing credentials lewat properti gradle.
+          # NOTE: Gradle akan memerlukan konfigurasi signing di build.gradle; banyak proyek membaca
+          # keystore dari file atau properti. Passing android.injected.signing.* sering dipakai di CI.
+          STORE="./release.jks"
+          STORE_PASS="${{ github.event.client_payload.keystorePassword }}"
+          KEY_ALIAS="${{ github.event.client_payload.keyAlias }}"
+          KEY_PASS="${{ github.event.client_payload.keyPassword }}"
 
-            echo "Syncing project..."
-            npx cap sync android
-            
-            echo "Building Capacitor project..."
-            cd android
-            chmod +x ./gradlew
-            
-            # Memilih perintah build Gradle yang sesuai
-            if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
-              echo "Building AAB (release)..."
-              ./gradlew bundleRelease --no-daemon
-            else
-              echo "Building APK (release)..."
-              ./gradlew assembleRelease --no-daemon
-            fi
-          } > build_log.txt 2>&1
+          if [[ "$BUILD_TYPE" == "release-aab" ]]; then
+            echo "Building AAB (bundleRelease) and passing signing properties to Gradle..."
+            ./gradlew bundleRelease --no-daemon \
+              -Pandroid.injected.signing.store.file="$STORE" \
+              -Pandroid.injected.signing.store.password="$STORE_PASS" \
+              -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+              -Pandroid.injected.signing.key.password="$KEY_PASS"
+          else
+            echo "Building signed APK (assembleRelease) and passing signing properties to Gradle..."
+            ./gradlew assembleRelease --no-daemon \
+              -Pandroid.injected.signing.store.file="$STORE" \
+              -Pandroid.injected.signing.store.password="$STORE_PASS" \
+              -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+              -Pandroid.injected.signing.key.password="$KEY_PASS"
+          fi
 
-      # 3. Memperbarui path untuk mencari hasil build
       - name: Upload Build File to Your Server
         if: success()
         run: |
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
           ARTIFACT_PATH=""
+
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then
-            # Path di Capacitor tidak menggunakan folder 'platforms'
-            ARTIFACT_PATH=$(find capacitor-project/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+            ARTIFACT_PATH=$(find app/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+          elif [[ "$BUILD_TYPE" == "debug" ]]; then
+            ARTIFACT_PATH=$(find app/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
           else
-            ARTIFACT_PATH=$(find capacitor-project/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+            ARTIFACT_PATH=$(find app/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
           fi
+
           if [ -z "$ARTIFACT_PATH" ]; then
             echo "::error::Build artifact not found!"
             exit 1
           fi
+
           curl -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
@@ -127,19 +172,21 @@ EOF
         if: failure()
         run: |
           USER_ID="${{ github.event.client_payload.userId }}"
-          # Path log file diperbarui
-          LOG_FILE="capacitor-project/build_log.txt"
-          REDACTED_LOG_FILE="capacitor-project/build_log_redacted.txt"
+          LOG_FILE="app/android/build.gradle || app/build_log.txt"
+          REDACTED_LOG_FILE="build_log_redacted.txt"
+
+          # generate minimal log if not found
           if [ ! -f "$LOG_FILE" ]; then
-            echo "Build gagal pada tahap sangat awal." > "$LOG_FILE"
-            echo "Mohon periksa kembali file proyek Anda (capacitor.config.json, package.json) dan coba lagi." >> "$LOG_FILE"
+            echo "Build gagal pada tahap awal atau tidak ada log lengkap." > "$LOG_FILE"
           fi
+
           sed \
             -e 's|https?://cordova\.build\.appjs\.net[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
             -e 's|/home/runner/work/[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
             -e 's|/opt/hostedtoolcache/[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
             -e 's|[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}|[User_privacy_security_PATH_is_hidden]|g' \
             "$LOG_FILE" > "$REDACTED_LOG_FILE"
+
           curl -X POST \
             -F "logFile=@$REDACTED_LOG_FILE" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
