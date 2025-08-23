@@ -10,11 +10,10 @@ jobs:
     permissions:
       contents: read
 
-    # ambil timeout dari client_payload
+    # timeout diambil dari client_payload (menit)
     timeout-minutes: ${{ github.event.client_payload.timeoutMinutes }}
 
     env:
-      # default gradle version jika client_payload.gradleVersion tidak disediakan
       DEFAULT_GRADLE_VERSION: "8.7.0"
 
     steps:
@@ -32,8 +31,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # -------------------------
-      # CACHE: npm global (keuntungan pada instalasi global)
       - name: Cache global npm
         uses: actions/cache@v4
         with:
@@ -45,12 +42,14 @@ jobs:
       - name: Download and Unzip Project
         run: |
           ZIP_URL="${{ github.event.client_payload.projectUrl }}"
+          if [ -z "$ZIP_URL" ]; then
+            echo "::error::projectUrl tidak diberikan di client_payload"
+            exit 1
+          fi
           curl -L -o project.zip "$ZIP_URL"
-          mkdir app
+          mkdir -p app
           unzip -q project.zip -d app
 
-      # -------------------------
-      # CACHE: project node_modules (key berdasarkan package-lock.json)
       - name: Cache project node_modules
         uses: actions/cache@v4
         with:
@@ -63,21 +62,33 @@ jobs:
         working-directory: app
         run: |
           echo "Installing project dependencies..."
-          npm ci
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
 
       - name: Build web assets (if present) and ensure Capacitor deps
         working-directory: app
         run: |
           npm run build --if-present
 
-          # install local @capacitor/cli jika tidak ada
-          if ! node -e "require('fs').existsSync('node_modules/@capacitor/cli')"; then
+          # Pastikan Capacitor CLI tersedia (prefer local)
+          if ! node -e "require('fs').existsSync('node_modules/@capacitor/cli')" 2>/dev/null; then
             npm install --no-audit --no-fund --save-dev @capacitor/cli @capacitor/core @capacitor/android
           fi
 
-      # -------------------------
-      # LOCK Gradle wrapper version (non-destructive, only for CI run)
-      # dapat diberikan via client_payload.gradleVersion, mis: "8.4.1"
+      - name: Add / Sync Android native project
+        working-directory: app
+        run: |
+          if [ ! -d "./android" ]; then
+            echo "Android native not found -> npx cap add android"
+            npx cap add android
+          fi
+          echo "Syncing Capacitor (copy web + plugins)..."
+          npx cap sync android
+          ls -la android || true
+
       - name: Lock Gradle Wrapper Version (CI-only)
         working-directory: app
         run: |
@@ -87,16 +98,14 @@ jobs:
 
           if [ -f "$PROPERTIES_FILE" ]; then
             echo "Setting Gradle distribution to $GRADLE_VERSION in $PROPERTIES_FILE (CI-only change)"
-            # replace distributionUrl line
+            # kompatibel dengan sed pada ubuntu runner
             sed -i.bak -E "s|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-all.zip|g" "$PROPERTIES_FILE"
             echo "Updated gradle-wrapper.properties:"
             grep distributionUrl "$PROPERTIES_FILE" || true
           else
-            echo "No gradle-wrapper.properties found (skipping lock). If android project missing, npx cap add android will create wrapper."
+            echo "gradle-wrapper.properties tidak ditemukan (skip lock). Jika android dibuat nanti, wrapper akan dibuat."
           fi
 
-      # -------------------------
-      # CACHE: Gradle wrapper zip & related caches
       - name: Cache Gradle wrapper & Gradle caches
         uses: actions/cache@v4
         with:
@@ -104,13 +113,10 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
             app/android/.gradle
-          # key includes package-lock AND gradle-wrapper.properties hash so cache invalidates when gradle version or deps change
           key: ${{ runner.os }}-gradle-cache-${{ hashFiles('app/package-lock.json', 'app/android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-cache-
 
-      # -------------------------
-      # CACHE: Maven local (~/.m2) & Android build-cache (optional, saves downloads)
       - name: Cache Maven repo and Android local cache
         uses: actions/cache@v4
         with:
@@ -121,33 +127,33 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-android-
 
-      - name: Add / Sync Android native project (only if missing or to update)
-        working-directory: app
-        run: |
-          if [ ! -d "./android" ]; then
-            npx cap add android
-          fi
-          npx cap sync android
-          ls -la android || true
-
-        - name: Prepare Signing Keystore (release builds only)
-        # hanya jalan kalau buildType mengindikasikan release
-        if: ${{ contains(fromJson(toJSON(github.event.client_payload)).buildType, 'release') }}
+      - name: Prepare Signing Keystore (release builds only)
         working-directory: app
         run: |
           set -e
-          cd android
-          KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl || '' }}"
+          # normalisasi buildType di shell
+          BUILD_RAW="${{ github.event.client_payload.buildType || 'debug' }}"
+          BUILD_TYPE=$(echo "$BUILD_RAW" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          echo "Normalized build type for keystore step: $BUILD_TYPE"
 
-          if [ -z "$KEYSTORE_URL" ]; then
-            echo "::error::Keystore URL not provided but buildType is release. Provide client_payload.keystoreUrl"
-            exit 1
-          fi
-
-          echo "Downloading keystore..."
-          curl -L -o release.jks "$KEYSTORE_URL"
-          chmod 600 release.jks
-          cd ..
+          # hanya jalankan download kalau tipe release
+          case "$BUILD_TYPE" in
+            *release*)
+              KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl || '' }}"
+              if [ -z "$KEYSTORE_URL" ]; then
+                echo "::error::Keystore URL not provided but buildType indicates release. Provide client_payload.keystoreUrl"
+                exit 1
+              fi
+              cd android
+              echo "Downloading keystore..."
+              curl -L -o release.jks "$KEYSTORE_URL"
+              chmod 600 release.jks
+              cd ..
+              ;;
+            *)
+              echo "Non-release build -> skip keystore download."
+              ;;
+          esac
 
       - name: Build Android (Gradle)
         working-directory: app
@@ -156,27 +162,24 @@ jobs:
           cd android
           chmod +x ./gradlew || true
 
-          BUILD_TYPE_RAW="${{ github.event.client_payload.buildType || 'debug' }}"
-          # normalisasi: lower-case, hapus spasi
-          BUILD_TYPE=$(echo "$BUILD_TYPE_RAW" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
-
+          BUILD_RAW="${{ github.event.client_payload.buildType || 'debug' }}"
+          BUILD_TYPE=$(echo "$BUILD_RAW" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
           echo "Normalized build type: $BUILD_TYPE"
-          # tempatkan log gradle sehingga step failure dapat meng-upload
+
           LOG_FILE="$(pwd)/build_log.txt"
           echo "Gradle output will be saved to: $LOG_FILE"
 
-          # helper: apakah ini debug?
+          # debug builds
           if [[ "$BUILD_TYPE" == debug* ]]; then
-            echo "Running debug build (assembleDebug) ..."
+            echo "Running debug build (assembleDebug)..."
             ./gradlew assembleDebug --no-daemon > "$LOG_FILE" 2>&1 || (tail -n 200 "$LOG_FILE" && exit 1)
             exit 0
           fi
 
-          # pastikan untuk release: harus ada keystore jika build.gradle mengharapkan file
+          # release builds
           if [[ "$BUILD_TYPE" == *release* ]]; then
             if [ ! -f "./release.jks" ]; then
               echo "::error::release.jks not found in android/ — ensure keystore was downloaded or provide keystoreUrl in payload"
-              # dump last 200 lines dari log jika ada
               [ -f "$LOG_FILE" ] && tail -n 200 "$LOG_FILE" || true
               exit 1
             fi
@@ -187,33 +190,31 @@ jobs:
             KEY_PASS="${{ github.event.client_payload.keyPassword || '' }}"
 
             if [[ "$BUILD_TYPE" == *aab* || "$BUILD_TYPE" == *bundle* ]]; then
-              echo "Building AAB (bundleRelease) ..."
+              echo "Building AAB (bundleRelease)..."
               ./gradlew bundleRelease --no-daemon \
                 -Pandroid.injected.signing.store.file="$STORE" \
                 -Pandroid.injected.signing.store.password="$STORE_PASS" \
                 -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
                 -Pandroid.injected.signing.key.password="$KEY_PASS" > "$LOG_FILE" 2>&1 || (tail -n 200 "$LOG_FILE" && exit 1)
             else
-              echo "Building Release APK (assembleRelease) ..."
+              echo "Building Release APK (assembleRelease)..."
               ./gradlew assembleRelease --no-daemon \
                 -Pandroid.injected.signing.store.file="$STORE" \
                 -Pandroid.injected.signing.store.password="$STORE_PASS" \
                 -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
                 -Pandroid.injected.signing.key.password="$KEY_PASS" > "$LOG_FILE" 2>&1 || (tail -n 200 "$LOG_FILE" && exit 1)
             fi
-
             exit 0
           fi
 
-          # fallback safety
-          echo "::error::Unknown buildType: $BUILD_TYPE_RAW"
+          echo "::error::Unknown buildType: $BUILD_RAW"
           exit 1
 
       - name: Upload Build File to Your Server
         if: success()
         run: |
-          BUILD_TYPE_RAW="${{ github.event.client_payload.buildType || 'debug' }}"
-          BUILD_TYPE=$(echo "$BUILD_TYPE_RAW" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          BUILD_RAW="${{ github.event.client_payload.buildType || 'debug' }}"
+          BUILD_TYPE=$(echo "$BUILD_RAW" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
           USER_ID="${{ github.event.client_payload.userId }}"
           ARTIFACT_PATH=""
 
@@ -234,7 +235,7 @@ jobs:
           curl -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
-            -F "buildType=$BUILD_TYPE_RAW" \
+            -F "buildType=$BUILD_RAW" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             https://cordova.build.appjs.net/upload-result/$USER_ID
 
@@ -242,16 +243,18 @@ jobs:
         if: failure()
         run: |
           USER_ID="${{ github.event.client_payload.userId }}"
-          # prioritas: android build log, fallback ke app/build_log.txt
           LOG_FILE=""
+
           if [ -f "app/android/build_log.txt" ]; then
             LOG_FILE="app/android/build_log.txt"
-          elif [ -f "app/android/build/outputs/**/*.log" ]; then
-            LOG_FILE=$(find app/android -type f -name "*.log" | head -n 1)
-          elif [ -f "app/build_log.txt" ]; then
-            LOG_FILE="app/build_log.txt"
           else
-            LOG_FILE=""
+            # cari file log lain di android
+            FOUND=$(find app/android -type f -name "*.log" | head -n 1 || true)
+            if [ -n "$FOUND" ]; then
+              LOG_FILE="$FOUND"
+            elif [ -f "app/build_log.txt" ]; then
+              LOG_FILE="app/build_log.txt"
+            fi
           fi
 
           if [ -z "$LOG_FILE" ]; then
