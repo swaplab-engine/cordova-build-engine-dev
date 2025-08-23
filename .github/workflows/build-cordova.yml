@@ -15,6 +15,10 @@ jobs:
       - name: Dump client_payload to log
         run: echo "${{ toJSON(github.event.client_payload) }}"
 
+      # <-- BARU: Langkah penting ini ditambahkan
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
       - name: Set up Node.js v20
         uses: actions/setup-node@v4
         with:
@@ -57,15 +61,15 @@ jobs:
       - name: Run Build Script
         working-directory: ./capacitor-project
         env:
-          # Mengatur environment variables untuk digunakan oleh build_android.sh
           KEYSTORE_URL: ${{ github.event.client_payload.keystoreUrl }}
           KEYSTORE_PASSWORD: ${{ github.event.client_payload.keystorePassword }}
           KEY_ALIAS: ${{ github.event.client_payload.keyAlias }}
           KEY_PASSWORD: ${{ github.event.client_payload.keyPassword }}
           BUILD_TYPE: ${{ github.event.client_payload.buildType }}
         run: |
-          # Menyalin skrip build ke dalam direktori kerja
-          cp ../.github/scripts/build_android.sh .
+          # Menyalin skrip build dari repositori yang sudah di-checkout
+          # Path sekarang menjadi langsung dari root workspace
+          cp .github/scripts/build_android.sh .
           chmod +x build_android.sh
           # Menjalankan skrip dan menyimpan lognya
           ./build_android.sh > build_log.txt 2>&1
@@ -73,7 +77,6 @@ jobs:
       - name: Upload Build File to Your Server
         if: success()
         run: |
-          # ... (Langkah ini tidak berubah, salin dari versi sebelumnya)
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
           ARTIFACT_PATH=""
@@ -96,7 +99,6 @@ jobs:
       - name: Filter and Upload Error Log
         if: failure()
         run: |
-          # ... (Langkah ini tidak berubah, salin dari versi sebelumnya)
           USER_ID="${{ github.event.client_payload.userId }}"
           LOG_FILE="capacitor-project/build_log.txt"
           REDACTED_LOG_FILE="capacitor-project/build_log_redacted.txt"
