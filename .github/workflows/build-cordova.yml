@@ -186,16 +186,22 @@ jobs:
           fi
 
           if [[ "$BUILD_TYPE" == *release* ]]; then
-            # Prefer keystore placed at android/app/release.jks
-            if [ -f "./app/release.jks" ]; then
-              STORE="./app/release.jks"
-            elif [ -f "./release.jks" ]; then
-              STORE="./release.jks"
+            # (⭐️ PERUBAHAN DI SINI ⭐️)
+            # Gunakan path absolut untuk menghindari kesalahan resolusi path oleh Gradle.
+            # `pwd` akan mengambil direktori saat ini (yaitu `app/android`), lalu kita gabungkan dengan path relatif ke keystore.
+            local_store_path=""
+            if [ -f "app/release.jks" ]; then
+              local_store_path="app/release.jks"
+            elif [ -f "release.jks" ]; then
+              local_store_path="release.jks"
             else
-              echo "::error::Keystore not found (expected android/app/release.jks)."
+              echo "::error::Keystore not found (expected at android/app/release.jks or android/release.jks)."
               [ -f "$LOG_FILE" ] && tail -n 200 "$LOG_FILE" || true
               exit 1
             fi
+            
+            STORE="$(pwd)/$local_store_path"
+            echo "Using absolute keystore path: $STORE"
 
             STORE_PASS="${{ github.event.client_payload.keystorePassword || '' }}"
             KEY_ALIAS="${{ github.event.client_payload.keyAlias || '' }}"
