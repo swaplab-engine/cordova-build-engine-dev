@@ -130,18 +130,25 @@ jobs:
           npx cap sync android
           ls -la android || true
 
-      - name: Prepare Signing Keystore (release builds only)
-        if: ${{ github.event.client_payload.buildType != 'debug' }}
+        - name: Prepare Signing Keystore (release builds only)
+        # hanya jalan kalau buildType mengindikasikan release
+        if: ${{ contains(fromJson(toJSON(github.event.client_payload)).buildType, 'release') }}
         working-directory: app
         run: |
+          set -e
           cd android
-          KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
+          KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl || '' }}"
+
+          if [ -z "$KEYSTORE_URL" ]; then
+            echo "::error::Keystore URL not provided but buildType is release. Provide client_payload.keystoreUrl"
+            exit 1
+          fi
+
+          echo "Downloading keystore..."
           curl -L -o release.jks "$KEYSTORE_URL"
           chmod 600 release.jks
           cd ..
 
-      # -------------------------
-      # Build (Gradle) — gunakan wrapper untuk konsistensi versi
       - name: Build Android (Gradle)
         working-directory: app
         run: |
@@ -149,43 +156,70 @@ jobs:
           cd android
           chmod +x ./gradlew || true
 
-          BUILD_TYPE="${{ github.event.client_payload.buildType }}"
-          echo "Selected build type: $BUILD_TYPE"
+          BUILD_TYPE_RAW="${{ github.event.client_payload.buildType || 'debug' }}"
+          # normalisasi: lower-case, hapus spasi
+          BUILD_TYPE=$(echo "$BUILD_TYPE_RAW" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
 
-          STORE="./release.jks"
-          STORE_PASS="${{ github.event.client_payload.keystorePassword }}"
-          KEY_ALIAS="${{ github.event.client_payload.keyAlias }}"
-          KEY_PASS="${{ github.event.client_payload.keyPassword }}"
+          echo "Normalized build type: $BUILD_TYPE"
+          # tempatkan log gradle sehingga step failure dapat meng-upload
+          LOG_FILE="$(pwd)/build_log.txt"
+          echo "Gradle output will be saved to: $LOG_FILE"
 
-          if [[ "$BUILD_TYPE" == "debug" ]]; then
-            ./gradlew assembleDebug --no-daemon
+          # helper: apakah ini debug?
+          if [[ "$BUILD_TYPE" == debug* ]]; then
+            echo "Running debug build (assembleDebug) ..."
+            ./gradlew assembleDebug --no-daemon > "$LOG_FILE" 2>&1 || (tail -n 200 "$LOG_FILE" && exit 1)
             exit 0
           fi
 
-          if [[ "$BUILD_TYPE" == "release-aab" ]]; then
-            ./gradlew bundleRelease --no-daemon \
-              -Pandroid.injected.signing.store.file="$STORE" \
-              -Pandroid.injected.signing.store.password="$STORE_PASS" \
-              -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
-              -Pandroid.injected.signing.key.password="$KEY_PASS"
-          else
-            ./gradlew assembleRelease --no-daemon \
-              -Pandroid.injected.signing.store.file="$STORE" \
-              -Pandroid.injected.signing.store.password="$STORE_PASS" \
-              -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
-              -Pandroid.injected.signing.key.password="$KEY_PASS"
+          # pastikan untuk release: harus ada keystore jika build.gradle mengharapkan file
+          if [[ "$BUILD_TYPE" == *release* ]]; then
+            if [ ! -f "./release.jks" ]; then
+              echo "::error::release.jks not found in android/ — ensure keystore was downloaded or provide keystoreUrl in payload"
+              # dump last 200 lines dari log jika ada
+              [ -f "$LOG_FILE" ] && tail -n 200 "$LOG_FILE" || true
+              exit 1
+            fi
+
+            STORE="./release.jks"
+            STORE_PASS="${{ github.event.client_payload.keystorePassword || '' }}"
+            KEY_ALIAS="${{ github.event.client_payload.keyAlias || '' }}"
+            KEY_PASS="${{ github.event.client_payload.keyPassword || '' }}"
+
+            if [[ "$BUILD_TYPE" == *aab* || "$BUILD_TYPE" == *bundle* ]]; then
+              echo "Building AAB (bundleRelease) ..."
+              ./gradlew bundleRelease --no-daemon \
+                -Pandroid.injected.signing.store.file="$STORE" \
+                -Pandroid.injected.signing.store.password="$STORE_PASS" \
+                -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+                -Pandroid.injected.signing.key.password="$KEY_PASS" > "$LOG_FILE" 2>&1 || (tail -n 200 "$LOG_FILE" && exit 1)
+            else
+              echo "Building Release APK (assembleRelease) ..."
+              ./gradlew assembleRelease --no-daemon \
+                -Pandroid.injected.signing.store.file="$STORE" \
+                -Pandroid.injected.signing.store.password="$STORE_PASS" \
+                -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+                -Pandroid.injected.signing.key.password="$KEY_PASS" > "$LOG_FILE" 2>&1 || (tail -n 200 "$LOG_FILE" && exit 1)
+            fi
+
+            exit 0
           fi
+
+          # fallback safety
+          echo "::error::Unknown buildType: $BUILD_TYPE_RAW"
+          exit 1
 
       - name: Upload Build File to Your Server
         if: success()
         run: |
-          BUILD_TYPE="${{ github.event.client_payload.buildType }}"
+          BUILD_TYPE_RAW="${{ github.event.client_payload.buildType || 'debug' }}"
+          BUILD_TYPE=$(echo "$BUILD_TYPE_RAW" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
           USER_ID="${{ github.event.client_payload.userId }}"
           ARTIFACT_PATH=""
 
-          if [[ "$BUILD_TYPE" == "release-aab" ]]; then
+          if [[ "$BUILD_TYPE" == *aab* || "$BUILD_TYPE" == *bundle* ]]; then
             ARTIFACT_PATH=$(find app/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
-          elif [[ "$BUILD_TYPE" == "debug" ]]; then
+          elif [[ "$BUILD_TYPE" == debug* ]]; then
             ARTIFACT_PATH=$(find app/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
           else
             ARTIFACT_PATH=$(find app/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
@@ -196,10 +230,11 @@ jobs:
             exit 1
           fi
 
+          echo "Uploading $ARTIFACT_PATH ..."
           curl -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
-            -F "buildType=$BUILD_TYPE" \
+            -F "buildType=$BUILD_TYPE_RAW" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             https://cordova.build.appjs.net/upload-result/$USER_ID
 
@@ -207,12 +242,26 @@ jobs:
         if: failure()
         run: |
           USER_ID="${{ github.event.client_payload.userId }}"
-          LOG_FILE="app/android/build.gradle || app/build_log.txt"
-          REDACTED_LOG_FILE="build_log_redacted.txt"
-
-          if [ ! -f "$LOG_FILE" ]; then
-            echo "Build gagal pada tahap awal atau tidak ada log lengkap." > "$LOG_FILE"
+          # prioritas: android build log, fallback ke app/build_log.txt
+          LOG_FILE=""
+          if [ -f "app/android/build_log.txt" ]; then
+            LOG_FILE="app/android/build_log.txt"
+          elif [ -f "app/android/build/outputs/**/*.log" ]; then
+            LOG_FILE=$(find app/android -type f -name "*.log" | head -n 1)
+          elif [ -f "app/build_log.txt" ]; then
+            LOG_FILE="app/build_log.txt"
+          else
+            LOG_FILE=""
           fi
+
+          if [ -z "$LOG_FILE" ]; then
+            echo "No build log found; creating minimal log..."
+            echo "Build gagal pada tahap awal atau tidak ada log lengkap." > build_log_fallback.txt
+            LOG_FILE="build_log_fallback.txt"
+          fi
+
+          echo "Filtering sensitive information from $LOG_FILE ..."
+          REDACTED_LOG_FILE="build_log_redacted.txt"
 
           sed \
             -e 's|https?://cordova\.build\.appjs\.net[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
@@ -221,6 +270,7 @@ jobs:
             -e 's|[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}|[User_privacy_security_PATH_is_hidden]|g' \
             "$LOG_FILE" > "$REDACTED_LOG_FILE"
 
+          echo "Uploading redacted error log to server..."
           curl -X POST \
             -F "logFile=@$REDACTED_LOG_FILE" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
