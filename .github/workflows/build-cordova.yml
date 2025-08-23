@@ -1,4 +1,4 @@
-name: Cordova Build (Debug/Release APK/AAB)
+name: Ionic Capacitor Build (Debug/Release APK/AAB)
 
 on:
   repository_dispatch:
@@ -9,9 +9,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
-    # BARU: Gunakan nilai dari client_payload untuk mengatur timeout
-    # Konversi milidetik ke menit, bulatkan ke atas.
     timeout-minutes: ${{ github.event.client_payload.timeoutMinutes }}
 
     steps:
@@ -28,85 +25,102 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-
-      - name: Cache global npm packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-global-v1
-          restore-keys: |
-            ${{ runner.os }}-npm-global-
-
-      - name: Install Cordova CLI
-        run: npm install -g cordova
+      
+      # BARU: Instal Capacitor CLI secara global
+      - name: Install Ionic and Capacitor CLI
+        run: npm install -g @ionic/cli @capacitor/cli
 
       - name: Download and Unzip Project
         run: |
           ZIP_URL="${{ github.event.client_payload.projectUrl }}"
-          curl -L -o cordovaProject.zip "$ZIP_URL"
-          mkdir cordova-project
-          unzip cordovaProject.zip -d cordova-project
+          curl -L -o capacitorProject.zip "$ZIP_URL"
+          mkdir capacitor-project
+          unzip capacitorProject.zip -d capacitor-project
 
+      # Cache dependensi node_modules tetap sama
       - name: Cache project dependencies (node_modules)
         uses: actions/cache@v4
         with:
-          path: cordova-project/node_modules
-          key: ${{ runner.os }}-npm-project-${{ hashFiles('cordova-project/package-lock.json') }}
+          path: capacitor-project/node_modules
+          key: ${{ runner.os }}-npm-project-${{ hashFiles('capacitor-project/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-npm-project-
 
-      - name: Prepare Signing Configuration
+      # BARU: Cara penandatanganan (signing) untuk Capacitor
+      - name: Prepare Signing Configuration for Capacitor
         run: |
-          cd cordova-project
+          cd capacitor-project
           KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
-          curl -L -o release.jks "$KEYSTORE_URL"
-          PACKAGE_TYPE="apk"
-          if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
-            PACKAGE_TYPE="bundle"
-          fi
-          cat > build.json << EOF
-          {
-            "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } }
-          }
+          curl -L -o android/app/release.jks "$KEYSTORE_URL"
+
+          # Buat file gradle.properties untuk menyimpan kredensial keystore
+          cat > android/gradle.properties << EOF
+          android.useAndroidX=true
+          android.enableJetifier=true
+          MYAPP_RELEASE_STORE_FILE=release.jks
+          MYAPP_RELEASE_STORE_PASSWORD=${{ github.event.client_payload.keystorePassword }}
+          MYAPP_RELEASE_KEY_ALIAS=${{ github.event.client_payload.keyAlias }}
+          MYAPP_RELEASE_KEY_PASSWORD=${{ github.event.client_payload.keyPassword }}
           EOF
 
+      # Cache Gradle tetap sama
       - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/*.gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('capacitor-project/android/**/*.gradle*', 'capacitor-project/android/**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
-
+      
+      # BARU: Langkah build untuk Capacitor
       - name: Install Dependencies and Build Project
         run: |
-          cd cordova-project
+          cd capacitor-project
           {
             echo "Installing project dependencies..."
             npm install
+
+            echo "Adding Android platform..."
+            npx cap add android
+
+            echo "Syncing project..."
+            npx cap sync android
             
-            echo "Building Cordova project..."
-            cordova platform add android
-            cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+            echo "Building Capacitor project..."
+            cd android
+            chmod +x ./gradlew
+            
+            # Pilih perintah build berdasarkan tipe (AAB atau APK)
+            if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
+              echo "Building AAB (release)..."
+              ./gradlew bundleRelease --no-daemon
+            else
+              echo "Building APK (release)..."
+              ./gradlew assembleRelease --no-daemon
+            fi
           } > build_log.txt 2>&1
 
+      # BARU: Lokasi artefak build di Capacitor
       - name: Upload Build File to Your Server
         if: success()
         run: |
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
           ARTIFACT_PATH=""
+
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then
-            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+            ARTIFACT_PATH=$(find capacitor-project/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
           else
-            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+            ARTIFACT_PATH=$(find capacitor-project/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
           fi
+
           if [ -z "$ARTIFACT_PATH" ]; then
             echo "::error::Build artifact not found!"
             exit 1
           fi
+
           curl -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
@@ -114,18 +128,21 @@ jobs:
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             https://cordova.build.appjs.net/upload-result/$USER_ID
 
+      # Langkah upload log error tetap sama
       - name: Filter and Upload Error Log
         if: failure()
         run: |
+          # ... (salin dan tempel langkah upload log error Anda di sini)
+          # Kode ini tidak perlu diubah.
           USER_ID="${{ github.event.client_payload.userId }}"
-          LOG_FILE="cordova-project/build_log.txt"
-          REDACTED_LOG_FILE="cordova-project/build_log_redacted.txt"
+          LOG_FILE="capacitor-project/build_log.txt"
+          REDACTED_LOG_FILE="capacitor-project/build_log_redacted.txt"
 
           if [ ! -f "$LOG_FILE" ]; then
             echo "Build gagal pada tahap sangat awal." > "$LOG_FILE"
             echo "Kemungkinan terjadi kesalahan saat mengunduh atau mempersiapkan dependensi awal." >> "$LOG_FILE"
             echo "Tidak ada log build detail yang dapat dihasilkan." >> "$LOG_FILE"
-            echo "Mohon periksa kembali file proyek Anda (config.xml, package.json) dan coba lagi." >> "$LOG_FILE"
+            echo "Mohon periksa kembali file proyek Anda (capacitor.config.json, package.json) dan coba lagi." >> "$LOG_FILE"
           fi
           
           echo "Filtering sensitive information from log file..."
