@@ -10,8 +10,12 @@ jobs:
     permissions:
       contents: read
 
-    # ambil timeout dari client_payload seperti workflow Cordova kamu
+    # ambil timeout dari client_payload
     timeout-minutes: ${{ github.event.client_payload.timeoutMinutes }}
+
+    env:
+      # default gradle version jika client_payload.gradleVersion tidak disediakan
+      DEFAULT_GRADLE_VERSION: "8.7.0"
 
     steps:
       - name: Dump client_payload to log
@@ -28,11 +32,13 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Cache global npm packages
+      # -------------------------
+      # CACHE: npm global (keuntungan pada instalasi global)
+      - name: Cache global npm
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-global-v1
+          key: ${{ runner.os }}-npm-global-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-npm-global-
 
@@ -43,13 +49,15 @@ jobs:
           mkdir app
           unzip -q project.zip -d app
 
-      - name: Cache project dependencies (node_modules)
+      # -------------------------
+      # CACHE: project node_modules (key berdasarkan package-lock.json)
+      - name: Cache project node_modules
         uses: actions/cache@v4
         with:
           path: app/node_modules
-          key: ${{ runner.os }}-npm-project-${{ hashFiles('app/package-lock.json') }}
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('app/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-npm-project-
+            ${{ runner.os }}-node-modules-
 
       - name: Install project dependencies
         working-directory: app
@@ -60,25 +68,66 @@ jobs:
       - name: Build web assets (if present) and ensure Capacitor deps
         working-directory: app
         run: |
-          # run build only if script exists
           npm run build --if-present
 
-          # ensure Capacitor CLI/core are available (if project didn't include them)
-          # prefer project's local @capacitor/cli, but install fallback dev deps if missing
+          # install local @capacitor/cli jika tidak ada
           if ! node -e "require('fs').existsSync('node_modules/@capacitor/cli')"; then
             npm install --no-audit --no-fund --save-dev @capacitor/cli @capacitor/core @capacitor/android
           fi
 
+      # -------------------------
+      # LOCK Gradle wrapper version (non-destructive, only for CI run)
+      # dapat diberikan via client_payload.gradleVersion, mis: "8.4.1"
+      - name: Lock Gradle Wrapper Version (CI-only)
+        working-directory: app
+        run: |
+          set -e
+          GRADLE_VERSION="${{ github.event.client_payload.gradleVersion || env.DEFAULT_GRADLE_VERSION }}"
+          PROPERTIES_FILE="android/gradle/wrapper/gradle-wrapper.properties"
+
+          if [ -f "$PROPERTIES_FILE" ]; then
+            echo "Setting Gradle distribution to $GRADLE_VERSION in $PROPERTIES_FILE (CI-only change)"
+            # replace distributionUrl line
+            sed -i.bak -E "s|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-all.zip|g" "$PROPERTIES_FILE"
+            echo "Updated gradle-wrapper.properties:"
+            grep distributionUrl "$PROPERTIES_FILE" || true
+          else
+            echo "No gradle-wrapper.properties found (skipping lock). If android project missing, npx cap add android will create wrapper."
+          fi
+
+      # -------------------------
+      # CACHE: Gradle wrapper zip & related caches
+      - name: Cache Gradle wrapper & Gradle caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            app/android/.gradle
+          # key includes package-lock AND gradle-wrapper.properties hash so cache invalidates when gradle version or deps change
+          key: ${{ runner.os }}-gradle-cache-${{ hashFiles('app/package-lock.json', 'app/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-cache-
+
+      # -------------------------
+      # CACHE: Maven local (~/.m2) & Android build-cache (optional, saves downloads)
+      - name: Cache Maven repo and Android local cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.android/build-cache
+          key: ${{ runner.os }}-maven-android-${{ hashFiles('app/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-android-
+
       - name: Add / Sync Android native project (only if missing or to update)
         working-directory: app
         run: |
-          # if android folder not present, create it; otherwise sync (copy web + plugins)
           if [ ! -d "./android" ]; then
             npx cap add android
           fi
-          # copy web assets and update native projects & plugins
           npx cap sync android
-          # make sure gradlew is executable later
           ls -la android || true
 
       - name: Prepare Signing Keystore (release builds only)
@@ -87,53 +136,39 @@ jobs:
         run: |
           cd android
           KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
-          # download keystore to android/release.jks
           curl -L -o release.jks "$KEYSTORE_URL"
           chmod 600 release.jks
           cd ..
 
-      - name: Cache Gradle packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('app/android/**/gradle-wrapper.properties', 'app/android/**/.gradle/**') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
+      # -------------------------
+      # Build (Gradle) — gunakan wrapper untuk konsistensi versi
       - name: Build Android (Gradle)
         working-directory: app
         run: |
+          set -e
           cd android
           chmod +x ./gradlew || true
 
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           echo "Selected build type: $BUILD_TYPE"
 
-          # debug build (no signing)
-          if [[ "$BUILD_TYPE" == "debug" ]]; then
-            ./gradlew assembleDebug --no-daemon
-            exit 0
-          fi
-
-          # release builds (apk or aab). Kita memasukkan signing credentials lewat properti gradle.
-          # NOTE: Gradle akan memerlukan konfigurasi signing di build.gradle; banyak proyek membaca
-          # keystore dari file atau properti. Passing android.injected.signing.* sering dipakai di CI.
           STORE="./release.jks"
           STORE_PASS="${{ github.event.client_payload.keystorePassword }}"
           KEY_ALIAS="${{ github.event.client_payload.keyAlias }}"
           KEY_PASS="${{ github.event.client_payload.keyPassword }}"
 
+          if [[ "$BUILD_TYPE" == "debug" ]]; then
+            ./gradlew assembleDebug --no-daemon
+            exit 0
+          fi
+
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then
-            echo "Building AAB (bundleRelease) and passing signing properties to Gradle..."
             ./gradlew bundleRelease --no-daemon \
               -Pandroid.injected.signing.store.file="$STORE" \
               -Pandroid.injected.signing.store.password="$STORE_PASS" \
               -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
               -Pandroid.injected.signing.key.password="$KEY_PASS"
           else
-            echo "Building signed APK (assembleRelease) and passing signing properties to Gradle..."
             ./gradlew assembleRelease --no-daemon \
               -Pandroid.injected.signing.store.file="$STORE" \
               -Pandroid.injected.signing.store.password="$STORE_PASS" \
@@ -175,7 +210,6 @@ jobs:
           LOG_FILE="app/android/build.gradle || app/build_log.txt"
           REDACTED_LOG_FILE="build_log_redacted.txt"
 
-          # generate minimal log if not found
           if [ ! -f "$LOG_FILE" ]; then
             echo "Build gagal pada tahap awal atau tidak ada log lengkap." > "$LOG_FILE"
           fi
