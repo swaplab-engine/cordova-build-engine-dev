@@ -62,23 +62,21 @@ jobs:
             npm install
 
             echo "Adding Android platform to create the directory..."
-            # PENTING: Perintah ini membuat folder 'android'
             npx cap add android
 
-            # Sekarang folder 'android' sudah ada, kita bisa menyimpan keystore
             echo "Preparing signing configuration..."
             KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
             curl -L -o android/app/release.jks "$KEYSTORE_URL"
 
-            # Buat file gradle.properties untuk signing
-            cat > android/gradle.properties << EOF
+            # Buat file gradle.properties
+            cat > android/gradle.properties <<EOF
             android.useAndroidX=true
             android.enableJetifier=true
             MYAPP_RELEASE_STORE_FILE=release.jks
             MYAPP_RELEASE_STORE_PASSWORD=${{ github.event.client_payload.keystorePassword }}
             MYAPP_RELEASE_KEY_ALIAS=${{ github.event.client_payload.keyAlias }}
             MYAPP_RELEASE_KEY_PASSWORD=${{ github.event.client_payload.keyPassword }}
-            EOF
+EOF
 
             echo "Syncing project..."
             npx cap sync android
@@ -87,7 +85,6 @@ jobs:
             cd android
             chmod +x ./gradlew
             
-            # Pilih perintah build berdasarkan tipe (AAB atau APK)
             if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
               echo "Building AAB (release)..."
               ./gradlew bundleRelease --no-daemon
@@ -131,9 +128,6 @@ jobs:
 
           if [ ! -f "$LOG_FILE" ]; then
             echo "Build gagal pada tahap sangat awal." > "$LOG_FILE"
-            echo "Kemungkinan terjadi kesalahan saat mengunduh atau mempersiapkan dependensi awal." >> "$LOG_FILE"
-            echo "Tidak ada log build detail yang dapat dihasilkan." >> "$LOG_FILE"
-            echo "Mohon periksa kembali file proyek Anda (capacitor.config.json, package.json) dan coba lagi." >> "$LOG_FILE"
           fi
           
           echo "Filtering sensitive information from log file..."
