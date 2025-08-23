@@ -1,4 +1,4 @@
-name: Capacitor Android Build (Debug/Release APK/AAB)
+name: Cordova Build (Debug/Release APK/AAB)
 
 on:
   repository_dispatch:
@@ -12,20 +12,13 @@ jobs:
 
     timeout-minutes: ${{ github.event.client_payload.timeoutMinutes }}
 
-    env:
-      # Ganti jika mau versi default lain; bisa dioverride lewat client_payload.gradleVersion
-      DEFAULT_GRADLE_VERSION: "8.2.1"
-
     steps:
       - name: Dump client_payload to log
         run: echo "${{ toJSON(github.event.client_payload) }}"
 
-      - name: Mask sensitive values
-        shell: bash
-        run: |
-          echo "::add-mask::${{ github.event.client_payload.keystorePassword }}"
-          echo "::add-mask::${{ github.event.client_payload.keyPassword }}"
-          echo "::add-mask::${{ github.event.client_payload.keyAlias }}"
+      # BARU: Catat waktu mulai build untuk menghitung durasi
+      - name: Record start time
+        run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
 
       - name: Set up Node.js v20
         uses: actions/setup-node@v4
@@ -35,251 +28,107 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
           java-version: '17'
+          distribution: 'temurin'
 
-      # Cache: npm global
-      - name: Cache global npm
+      - name: Cache global npm packages
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-global-${{ hashFiles('**/package-lock.json') }}
+          key: ${{ runner.os }}-npm-global-v1
           restore-keys: |
             ${{ runner.os }}-npm-global-
 
+      - name: Install Cordova CLI
+        run: npm install -g cordova
+
       - name: Download and Unzip Project
-        shell: bash
         run: |
           ZIP_URL="${{ github.event.client_payload.projectUrl }}"
-          if [ -z "$ZIP_URL" ]; then
-            echo "::error::client_payload.projectUrl is required"
-            exit 1
-          fi
-          curl -fsSL -o project.zip "$ZIP_URL"
-          mkdir -p app
-          unzip -q project.zip -d app
+          curl -L -o cordovaProject.zip "$ZIP_URL"
+          mkdir cordova-project
+          unzip cordovaProject.zip -d cordova-project
 
-      # Cache: project node_modules
-      - name: Cache project node_modules
+      - name: Cache project dependencies (node_modules)
         uses: actions/cache@v4
         with:
-          path: app/node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('app/package-lock.json') }}
+          path: cordova-project/node_modules
+          key: ${{ runner.os }}-npm-project-${{ hashFiles('cordova-project/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-node-modules-
+            ${{ runner.os }}-npm-project-
 
-      - name: Install project dependencies
-        working-directory: app
+      - name: Prepare Signing Configuration
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
+          cd cordova-project
+          KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
+          curl -L -o release.jks "$KEYSTORE_URL"
+          PACKAGE_TYPE="apk"
+          if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
+            PACKAGE_TYPE="bundle"
           fi
+          cat > build.json << EOF
+          {
+            "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } }
+          }
+          EOF
 
-      - name: Build web assets (if present) & ensure Capacitor deps
-        working-directory: app
-        run: |
-          npm run build --if-present
-          if ! node -e "require('fs').existsSync('node_modules/@capacitor/cli')" 2>/dev/null; then
-            npm install --no-audit --no-fund --save-dev @capacitor/cli @capacitor/core @capacitor/android
-          fi
-
-      - name: Add / Sync Android native project
-        working-directory: app
-        run: |
-          if [ ! -d "./android" ]; then
-            npx cap add android
-          fi
-          npx cap sync android
-          ls -la android || true
-
-      - name: Lock Gradle Wrapper Version (CI-only)
-        working-directory: app
-        run: |
-          set -e
-          GRADLE_VERSION="${{ github.event.client_payload.gradleVersion || env.DEFAULT_GRADLE_VERSION }}"
-          PROPS="android/gradle/wrapper/gradle-wrapper.properties"
-          if [ -f "$PROPS" ]; then
-            sed -i.bak -E "s|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-all.zip|g" "$PROPS"
-            echo "Using Gradle: $(grep distributionUrl "$PROPS" || true)"
-          else
-            echo "gradle-wrapper.properties not found; it will be created by Android project if needed."
-          fi
-
-      # Cache: Gradle & wrapper
-      - name: Cache Gradle wrapper & caches
+      - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-            app/android/.gradle
-          key: ${{ runner.os }}-gradle-cache-${{ hashFiles('app/package-lock.json', 'app/android/gradle/wrapper/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/*.gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
           restore-keys: |
-            ${{ runner.os }}-gradle-cache-
+            ${{ runner.os }}-gradle-
 
-      # Cache: Maven repo & Android build-cache
-      - name: Cache Maven repo and Android local cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.m2/repository
-            ~/.android/build-cache
-          key: ${{ runner.os }}-maven-android-${{ hashFiles('app/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-maven-android-
-
-      - name: Prepare Keystore from Server (release only)
-        working-directory: app
-        shell: bash
+      - name: Install Dependencies and Build Project
         run: |
-          set -e
-          BUILD_RAW="${{ github.event.client_payload.buildType || 'debug' }}"
-          BUILD_TYPE=$(echo "$BUILD_RAW" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
-          echo "Normalized build type for keystore: $BUILD_TYPE"
-
-          if [[ "$BUILD_TYPE" == *release* ]]; then
-            KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl || '' }}"
-            if [ -z "$KEYSTORE_URL" ]; then
-              echo "::error::keystoreUrl is required for release builds"
-              exit 1
-            fi
-
-            mkdir -p android/app
-            echo "Downloading keystore from server -> android/app/release.jks"
-            curl -fsSL -o android/app/release.jks "$KEYSTORE_URL"
-
-            if [ ! -s android/app/release.jks ]; then
-              echo "::error::Downloaded keystore is missing/empty"
-              exit 1
-            fi
-            chmod 600 android/app/release.jks
-
-            # Optional: quick keystore sanity check (non-sensitive line)
-            echo "Keystore quick check:"
-            keytool -list -keystore android/app/release.jks -storepass "${{ github.event.client_payload.keystorePassword }}" 2>/dev/null | head -n 1 || true
-
-            ls -la android/app || true
-          else
-            echo "Non-release build => skip keystore download."
-          fi
-
-      - name: Build Android (Gradle)
-        working-directory: app
-        shell: bash
-        run: |
-          set -e
-          cd android
-          chmod +x ./gradlew || true
-
-          BUILD_RAW="${{ github.event.client_payload.buildType || 'debug' }}"
-          BUILD_TYPE=$(echo "$BUILD_RAW" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
-          echo "Normalized build type: $BUILD_TYPE"
-
-          LOG_FILE="$(pwd)/build_log.txt"
-          echo "Gradle output -> $LOG_FILE"
-
-          if [[ "$BUILD_TYPE" == debug* ]]; then
-            ./gradlew assembleDebug --no-daemon > "$LOG_FILE" 2>&1 || (tail -n 200 "$LOG_FILE" && exit 1)
-            exit 0
-          fi
-
-          if [[ "$BUILD_TYPE" == *release* ]]; then
-            # (⭐️ PERUBAHAN DI SINI ⭐️)
-            # Gunakan path absolut untuk menghindari kesalahan resolusi path oleh Gradle.
-            # `pwd` akan mengambil direktori saat ini (yaitu `app/android`), lalu kita gabungkan dengan path relatif ke keystore.
-            local_store_path=""
-            if [ -f "app/release.jks" ]; then
-              local_store_path="app/release.jks"
-            elif [ -f "release.jks" ]; then
-              local_store_path="release.jks"
-            else
-              echo "::error::Keystore not found (expected at android/app/release.jks or android/release.jks)."
-              [ -f "$LOG_FILE" ] && tail -n 200 "$LOG_FILE" || true
-              exit 1
-            fi
+          cd cordova-project
+          {
+            echo "Installing project dependencies..."
+            npm install
             
-            STORE="$(pwd)/$local_store_path"
-            echo "Using absolute keystore path: $STORE"
-
-            STORE_PASS="${{ github.event.client_payload.keystorePassword || '' }}"
-            KEY_ALIAS="${{ github.event.client_payload.keyAlias || '' }}"
-            KEY_PASS="${{ github.event.client_payload.keyPassword || '' }}"
-
-            if [[ "$BUILD_TYPE" == *aab* || "$BUILD_TYPE" == *bundle* ]]; then
-              ./gradlew bundleRelease --no-daemon \
-                -Pandroid.injected.signing.store.file="$STORE" \
-                -Pandroid.injected.signing.store.password="$STORE_PASS" \
-                -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
-                -Pandroid.injected.signing.key.password="$KEY_PASS" > "$LOG_FILE" 2>&1 || (tail -n 200 "$LOG_FILE" && exit 1)
-            else
-              ./gradlew assembleRelease --no-daemon \
-                -Pandroid.injected.signing.store.file="$STORE" \
-                -Pandroid.injected.signing.store.password="$STORE_PASS" \
-                -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
-                -Pandroid.injected.signing.key.password="$KEY_PASS" > "$LOG_FILE" 2>&1 || (tail -n 200 "$LOG_FILE" && exit 1)
-            fi
-            exit 0
-          fi
-
-          echo "::error::Unknown buildType: $BUILD_RAW"
-          exit 1
+            echo "Building Cordova project..."
+            cordova platform add android
+            cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+          } > build_log.txt 2>&1
 
       - name: Upload Build File to Your Server
         if: success()
-        shell: bash
         run: |
-          BUILD_RAW="${{ github.event.client_payload.buildType || 'debug' }}"
-          BUILD_TYPE=$(echo "$BUILD_RAW" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
           ARTIFACT_PATH=""
-
-          if [[ "$BUILD_TYPE" == *aab* || "$BUILD_TYPE" == *bundle* ]]; then
-            ARTIFACT_PATH=$(find app/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
-          elif [[ "$BUILD_TYPE" == debug* ]]; then
-            ARTIFACT_PATH=$(find app/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          if [[ "$BUILD_TYPE" == "release-aab" ]]; then
+            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
           else
-            ARTIFACT_PATH=$(find app/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
           fi
-
           if [ -z "$ARTIFACT_PATH" ]; then
             echo "::error::Build artifact not found!"
             exit 1
           fi
-
-          echo "Uploading $ARTIFACT_PATH ..."
           curl -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
-            -F "buildType=$BUILD_RAW" \
+            -F "buildType=$BUILD_TYPE" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             https://cordova.build.appjs.net/upload-result/$USER_ID
 
       - name: Filter and Upload Error Log
         if: failure()
-        shell: bash
         run: |
           USER_ID="${{ github.event.client_payload.userId }}"
-          LOG_FILE=""
+          LOG_FILE="cordova-project/build_log.txt"
+          REDACTED_LOG_FILE="cordova-project/build_log_redacted.txt"
 
-          if [ -f "app/android/build_log.txt" ]; then
-            LOG_FILE="app/android/build_log.txt"
-          else
-            FOUND=$(find app/android -type f -name "*.log" | head -n 1 || true)
-            if [ -n "$FOUND" ]; then
-              LOG_FILE="$FOUND"
-            elif [ -f "app/build_log.txt" ]; then
-              LOG_FILE="app/build_log.txt"
-            fi
+          if [ ! -f "$LOG_FILE" ]; then
+            echo "Build gagal pada tahap sangat awal." > "$LOG_FILE"
           fi
-
-          if [ -z "$LOG_FILE" ]; then
-            echo "Build gagal awal; membuat log minimal..." > build_log_fallback.txt
-            LOG_FILE="build_log_fallback.txt"
-          fi
-
-          REDACTED_LOG_FILE="build_log_redacted.txt"
+          
+          echo "Filtering sensitive information from log file..."
+          
           sed \
             -e 's|https?://cordova\.build\.appjs\.net[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
             -e 's|/home/runner/work/[^ ]*|[User_privacy_security_PATH_is_hidden]|g' \
@@ -287,8 +136,27 @@ jobs:
             -e 's|[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}|[User_privacy_security_PATH_is_hidden]|g' \
             "$LOG_FILE" > "$REDACTED_LOG_FILE"
 
+          echo "Uploading redacted error log to server..."
           curl -X POST \
             -F "logFile=@$REDACTED_LOG_FILE" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             https://cordova.build.appjs.net/upload-log/$USER_ID
+
+      # BARU: Laporkan status akhir dan durasi build
+      - name: Report Build Duration and Status
+        if: always() # Pastikan langkah ini selalu berjalan, baik sukses maupun gagal
+        run: |
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          USER_ID="${{ github.event.client_payload.userId }}"
+
+          echo "Reporting final status: ${{ job.status }} after ${duration} seconds."
+          
+          curl -X POST \
+            -F "buildId=${{ github.event.client_payload.buildId }}" \
+            -F "userId=$USER_ID" \
+            -F "durationSeconds=$duration" \
+            -F "status=${{ job.status }}" \
+            -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
+            https://cordova.build.appjs.net/report-duration
