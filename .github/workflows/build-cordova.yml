@@ -13,14 +13,13 @@ jobs:
 
     steps:
       - name: Record start time
+        shell: bash
         run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
 
-      # ===============================================================
-      # LANGKAH 1: LAPORKAN BAHWA BUILD SUDAH DIMULAI (IN_PROGRESS)
-      # ===============================================================
       - name: Report Build In Progress
+        shell: bash
         run: |
-          curl -X POST \
+          curl --fail -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             -d '{
@@ -30,15 +29,12 @@ jobs:
             }' \
             "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
 
-      # ===============================================================
-      # LANGKAH 2: SETUP LINGKUNGAN BUILD (Node, Java, Cache)
-      # ===============================================================
       - name: Set up Node.js v20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Set up JDK 17 and Gradle
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
@@ -48,15 +44,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-global-v2
+          key: ${{ runner.os }}-npm-global-v3
 
       - name: Install Cordova CLI
+        shell: bash
         run: npm install -g cordova
 
-      # ===============================================================
-      # LANGKAH 3: PROSES BUILD
-      # ===============================================================
       - name: Download and Unzip Project
+        shell: bash
         run: |
           ZIP_URL="${{ github.event.client_payload.projectUrl }}"
           curl -L -o cordovaProject.zip "$ZIP_URL"
@@ -65,6 +60,7 @@ jobs:
 
       - name: Prepare Signing Configuration
         if: ${{ startsWith(github.event.client_payload.buildType, 'release') }}
+        shell: bash
         run: |
           cd cordova-project
           KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
@@ -87,43 +83,43 @@ jobs:
           restore-keys: ${{ runner.os }}-gradle-
 
       - name: Install Dependencies and Build Project
+        shell: bash
         run: |
           cd cordova-project
-          npm install
-          cordova platform add android
-          if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
-            cordova build android --debug -- --gradleArg=--no-daemon
-          else
-            cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
-          fi
-
-      # ===============================================================
-      # LANGKAH 4: JIKA BUILD BERHASIL, UPLOAD & LAPORKAN
-      # ===============================================================
+          {
+            echo "--- Installing Project Dependencies ---"
+            npm install
+            echo "--- Adding Android Platform ---"
+            cordova platform add android
+            echo "--- Starting Cordova Build ---"
+            if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
+              cordova build android --debug -- --gradleArg=--no-daemon
+            else
+              cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+            fi
+            echo "--- Cordova Build Finished ---"
+          } > ../build_log.txt 2>&1
+        
       - name: Upload Build File and Report Success
         if: success()
+        shell: bash
         run: |
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           
-          # Cari file hasil build
           ARTIFACT_PATH=""
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
           elif [[ "$BUILD_TYPE" == "release-apk" ]]; then
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          else # debug-apk
+          else
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
           fi
           
-          if [ -z "$ARTIFACT_PATH" ]; then
-            echo "::error::Build artifact not found!"
-            exit 1
-          fi
+          if [ -z "$ARTIFACT_PATH" ]; then echo "::error::Build artifact not found!"; exit 1; fi
 
-          # Upload file ke server
-          UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+          UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" --fail -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
             -F "buildType=$BUILD_TYPE" \
@@ -133,44 +129,30 @@ jobs:
           HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
           DOWNLOAD_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
 
-          if [[ "$HTTP_CODE" != "200" ]]; then
-            echo "::error::Gagal mengupload file hasil build. Server merespons dengan kode $HTTP_CODE"
-            exit 1
-          fi
+          if [[ "$HTTP_CODE" != "200" ]]; then echo "::error::Gagal upload. Kode: $HTTP_CODE"; exit 1; fi
 
-          # Hitung durasi
           end_time=$(date +%s)
           duration=$((end_time - start_time))
 
-          # Laporkan sukses ke server
-          curl -X POST \
+          curl --fail -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             -d '{
-              "buildId": "${{ github.event.client_payload.buildId }}",
-              "userId": "$USER_ID",
-              "status": "complete",
-              "durationSeconds": "'"$duration"'",
-              "downloadUrl": "'"$DOWNLOAD_URL"'"
+              "buildId": "${{ github.event.client_payload.buildId }}", "userId": "'"$USER_ID"'",
+              "status": "complete", "durationSeconds": "'"$duration"'", "downloadUrl": "'"$DOWNLOAD_URL"'"
             }' \
             "$APP_BASE_URL/api/github-webhook"
 
-      # ===============================================================
-      # LANGKAH 5: JIKA BUILD GAGAL, UPLOAD LOG & LAPORKAN
-      # ===============================================================
       - name: Upload Log File and Report Failure
-        if: failure()
+        if: always() && steps.build.outcome == 'failure'
+        shell: bash
         run: |
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
 
-          # Buat file log dummy jika tidak ada
-          if [ ! -f "build_log.txt" ]; then
-            echo "Build gagal pada tahap awal sebelum log dibuat." > build_log.txt
-          fi
+          if [ ! -f "build_log.txt" ]; then echo "Build gagal pada tahap awal." > build_log.txt; fi
 
-          # Upload file log ke server
           UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             -F "logFile=@build_log.txt" \
             -F "buildId=$BUILD_ID" \
@@ -180,23 +162,16 @@ jobs:
           HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
           LOG_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
 
-          if [[ "$HTTP_CODE" != "200" ]]; then
-            LOG_URL="" # Gagal upload, kirim URL kosong
-          fi
+          if [[ "$HTTP_CODE" != "200" ]]; then LOG_URL=""; fi
 
-          # Hitung durasi
           end_time=$(date +%s)
           duration=$((end_time - start_time))
 
-          # Laporkan kegagalan ke server
-          curl -X POST \
+          curl --fail -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             -d '{
-              "buildId": "$BUILD_ID",
-              "userId": "$USER_ID",
-              "status": "failed",
-              "durationSeconds": "'"$duration"'",
-              "logUrl": "'"$LOG_URL"'"
+              "buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'",
+              "status": "failed", "durationSeconds": "'"$duration"'", "logUrl": "'"$LOG_URL"'"
             }' \
             "$APP_BASE_URL/api/github-webhook"
