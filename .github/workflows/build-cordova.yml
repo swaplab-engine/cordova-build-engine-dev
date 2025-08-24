@@ -10,6 +10,10 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: ${{ github.event.client_payload.timeoutMinutes || 8 }}
+    
+    # ID ini penting untuk referensi di langkah terakhir
+    outputs:
+      outcome: ${{ steps.final_check.outputs.outcome }}
 
     steps:
       - name: Record start time
@@ -83,6 +87,7 @@ jobs:
           restore-keys: ${{ runner.os }}-gradle-
 
       - name: Install Dependencies and Build Project
+        id: cordova_build_step # Beri ID pada langkah ini
         shell: bash
         run: |
           cd cordova-project
@@ -143,15 +148,22 @@ jobs:
             }' \
             "$APP_BASE_URL/api/github-webhook"
 
+      # **PERBAIKAN UTAMA PADA PENANGANAN ERROR**
       - name: Upload Log File and Report Failure
-        if: always() && steps.build.outcome == 'failure'
+        # Jalankan langkah ini jika seluruh job gagal
+        if: failure()
         shell: bash
         run: |
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
 
-          if [ ! -f "build_log.txt" ]; then echo "Build gagal pada tahap awal." > build_log.txt; fi
+          # Salin log dari direktori proyek jika ada
+          if [ -f "cordova-project/build_log.txt" ]; then
+             cp cordova-project/build_log.txt ./build_log.txt
+          elif [ ! -f "build_log.txt" ]; then
+             echo "Build gagal pada tahap awal. File log tidak ditemukan." > build_log.txt
+          fi
 
           UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             -F "logFile=@build_log.txt" \
