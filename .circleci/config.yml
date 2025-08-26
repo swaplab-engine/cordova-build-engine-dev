@@ -69,7 +69,8 @@ jobs:
 
       - run:
           name: Install Node.js (via nvm) and configure npm prefix
-          shell: /bin/bash --login -eo pipefail
+          # note: no --login here so BASH_ENV works consistently
+          shell: /bin/bash -eo pipefail
           command: |
             set -eu
 
@@ -81,20 +82,17 @@ jobs:
             echo "Has apt-get? $(command -v apt-get >/dev/null 2>&1 && echo yes || echo no)"
             echo "==========================="
 
-            # Install nvm (no sudo required) and Node.js LTS (20)
+            # install nvm (user-local)
             export NVM_DIR="$HOME/.nvm"
             if [ ! -d "$NVM_DIR" ]; then
               curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
             fi
 
-            # load nvm
-            export NVM_DIR="$HOME/.nvm"
-            # shellcheck disable=SC1090
+            # load nvm in this shell and install node 20
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-
-            # install (or ensure) node 20
             nvm install 20 || nvm use 20
             nvm alias default 20
+
             node -v || true
             npm -v || true
 
@@ -102,26 +100,31 @@ jobs:
             mkdir -p "$HOME/.npm-global"
             npm config set prefix "$HOME/.npm-global"
 
-            # persist PATH for subsequent steps
+            # persist PATH for subsequent steps via BASH_ENV
             echo 'export PATH=$HOME/.npm-global/bin:$PATH' >> $BASH_ENV
-            export PATH=$HOME/.npm-global/bin:$PATH
+            echo 'export NVM_DIR="$HOME/.nvm"' >> $BASH_ENV
+            echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' >> $BASH_ENV
 
-            echo "After nvm install:"
-            echo "node: $(command -v node || echo not-found)"
-            echo "npm:  $(command -v npm || echo not-found)"
-            echo "npm global prefix: $(npm config get prefix || echo unknown)"
+            echo "npm prefix: $(npm config get prefix || echo unknown)"
+            echo "PATH now: $PATH"
 
       - run:
           name: Install Cordova CLI (global)
-          shell: /bin/bash --login -eo pipefail
+          shell: /bin/bash -eo pipefail
           command: |
-            # load PATH persisted in BASH_ENV for this shell
+            # ensure BASH_ENV is sourced (CircleCI will do it for non-login shells),
+            # but explicitly source nvm to be safe
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm use 20 || true
+
             export PATH=$HOME/.npm-global/bin:$PATH
 
-            echo "Installing cordova globally..."
+            echo "node: $(command -v node || echo not-found) $(node -v || true)"
+            echo "npm:  $(command -v npm || echo not-found) $(npm -v || true)"
+
             npm install -g cordova --no-audit --no-fund
-            echo "Cordova version: $(cordova -v || echo not-found)"
-            echo "npm global bins:"
+            cordova -v || true
             ls -la $HOME/.npm-global/bin || true
 
       - save_cache:
@@ -131,6 +134,7 @@ jobs:
 
       - run:
           name: Download and Unzip Project
+          shell: /bin/bash -eo pipefail
           command: |
             curl -L -o cordovaProject.zip "<< pipeline.parameters.projectUrl >>"
             mkdir -p cordova-project
@@ -138,7 +142,7 @@ jobs:
 
       - run:
           name: Prepare Signing Configuration
-          shell: /bin/bash --login -eo pipefail
+          shell: /bin/bash -eo pipefail
           command: |
             if [[ "<< pipeline.parameters.buildType >>" == "release-apk" || "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
               cd cordova-project
@@ -153,10 +157,15 @@ jobs:
 
       - run:
           name: Install Dependencies and Build Project
-          shell: /bin/bash --login -eo pipefail
+          shell: /bin/bash -eo pipefail
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
+            # ensure nvm and npm global bin are loaded
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm use 20 || true
             export PATH=$HOME/.npm-global/bin:$PATH
+
             cd cordova-project
 
             echo "--- Installing Project Dependencies ---"
@@ -182,6 +191,7 @@ jobs:
       - run:
           name: Upload Build File and Report Success
           when: on_success
+          shell: /bin/bash -eo pipefail
           command: |
             ARTIFACT_PATH=""
             if [[ "$BUILD_TYPE" == "release-aab" ]]; then
@@ -221,6 +231,7 @@ jobs:
       - run:
           name: Upload Log File and Report Failure
           when: on_fail
+          shell: /bin/bash -eo pipefail
           command: |
             LOG_CONTENT="build_log.txt"
             if [ ! -f "$LOG_CONTENT" ]; then
