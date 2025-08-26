@@ -34,9 +34,6 @@ parameters:
 
 jobs:
   build:
-    # PERBAIKAN: Mengaktifkan cache untuk image Docker itu sendiri
-    docker_layer_caching: true
-
     docker:
       - image: cimg/android:2024.11.1-node
     
@@ -65,14 +62,13 @@ jobs:
               }' \
               "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
       
+      # Cache untuk Cordova CLI (sudah optimal)
       - restore_cache:
           keys:
             - cordova-cli-v2
-
       - run:
           name: "Install Cordova CLI (if not cached)"
           command: sudo npm install -g cordova
-      
       - save_cache:
           key: cordova-cli-v2
           paths:
@@ -98,10 +94,17 @@ jobs:
               printf "{ \"android\": { \"release\": { \"keystore\": \"release.jks\", \"storePassword\": \"<< pipeline.parameters.keystorePassword >>\", \"alias\": \"<< pipeline.parameters.keyAlias >>\", \"password\": \"<< pipeline.parameters.keyPassword >>\", \"packageType\": \"%s\" } } }" "$PACKAGE_TYPE" > build.json
             fi
 
+      # PERBAIKAN: Memisahkan dan mengoptimalkan cache untuk NPM dan Gradle
       - restore_cache:
+          name: Restore NPM Cache
           keys:
-            - project-deps-v1-{{ checksum "cordova-project/package.json" }}
-            - project-deps-v1-
+            - npm-deps-v1-{{ checksum "cordova-project/package.json" }}
+            - npm-deps-v1-
+      - restore_cache:
+          name: Restore Gradle Cache
+          keys:
+            - gradle-deps-v1-{{ checksum "cordova-project/package.json" }}
+            - gradle-deps-v1-
 
       - run:
           name: "Install Dependencies and Build Project"
@@ -123,10 +126,17 @@ jobs:
             fi
             echo "--- Cordova Build Finished ---"
 
+      # PERBAIKAN: Menyimpan cache NPM dan Gradle secara terpisah dan lebih lengkap
       - save_cache:
-          key: project-deps-v1-{{ checksum "cordova-project/package.json" }}
+          name: Save NPM Cache
+          key: npm-deps-v1-{{ checksum "cordova-project/package.json" }}
           paths:
             - cordova-project/node_modules
+            - /home/circleci/.npm
+      - save_cache:
+          name: Save Gradle Cache
+          key: gradle-deps-v1-{{ checksum "cordova-project/package.json" }}
+          paths:
             - /home/circleci/.gradle
 
       - run:
