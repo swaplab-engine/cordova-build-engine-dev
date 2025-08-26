@@ -68,44 +68,61 @@ jobs:
             - npm-global-v1
 
       - run:
-          name: Install Node.js and npm
+          name: Install Node.js (via nvm) and configure npm prefix
           shell: /bin/bash --login -eo pipefail
           command: |
-            # update package list
-            sudo apt-get update
+            set -eu
 
-            # basic tools
-            sudo apt-get install -y curl ca-certificates gnupg
+            echo "=== Debug: system info ==="
+            whoami || true
+            uname -a || true
+            if [ -f /etc/os-release ]; then cat /etc/os-release; fi
+            echo "Has sudo? $(command -v sudo >/dev/null 2>&1 && echo yes || echo no)"
+            echo "Has apt-get? $(command -v apt-get >/dev/null 2>&1 && echo yes || echo no)"
+            echo "==========================="
 
-            # install Node 20 (ubah jika butuh versi lain)
-            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-            sudo apt-get install -y nodejs
+            # Install nvm (no sudo required) and Node.js LTS (20)
+            export NVM_DIR="$HOME/.nvm"
+            if [ ! -d "$NVM_DIR" ]; then
+              curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
+            fi
 
-            # sanity checks
+            # load nvm
+            export NVM_DIR="$HOME/.nvm"
+            # shellcheck disable=SC1090
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+            # install (or ensure) node 20
+            nvm install 20 || nvm use 20
+            nvm alias default 20
             node -v || true
             npm -v || true
-            which npm || true
 
-            # configure npm global prefix to user home to avoid permission issues
-            mkdir -p /home/circleci/.npm-global
-            npm config set prefix '/home/circleci/.npm-global'
+            # configure npm global prefix so `npm -g` doesn't require sudo
+            mkdir -p "$HOME/.npm-global"
+            npm config set prefix "$HOME/.npm-global"
 
             # persist PATH for subsequent steps
-            echo 'export PATH=/home/circleci/.npm-global/bin:$PATH' >> $BASH_ENV
-            export PATH=/home/circleci/.npm-global/bin:$PATH
+            echo 'export PATH=$HOME/.npm-global/bin:$PATH' >> $BASH_ENV
+            export PATH=$HOME/.npm-global/bin:$PATH
 
-            # show final settings
-            npm prefix -g || true
-            echo "PATH=$PATH"
+            echo "After nvm install:"
+            echo "node: $(command -v node || echo not-found)"
+            echo "npm:  $(command -v npm || echo not-found)"
+            echo "npm global prefix: $(npm config get prefix || echo unknown)"
 
       - run:
-          name: Install Cordova CLI
+          name: Install Cordova CLI (global)
           shell: /bin/bash --login -eo pipefail
           command: |
-            # ensure PATH is loaded for this shell (BASH_ENV will be used on new shells)
-            export PATH=/home/circleci/.npm-global/bin:$PATH
-            npm install -g cordova
-            cordova -v || true
+            # load PATH persisted in BASH_ENV for this shell
+            export PATH=$HOME/.npm-global/bin:$PATH
+
+            echo "Installing cordova globally..."
+            npm install -g cordova --no-audit --no-fund
+            echo "Cordova version: $(cordova -v || echo not-found)"
+            echo "npm global bins:"
+            ls -la $HOME/.npm-global/bin || true
 
       - save_cache:
           key: npm-global-v1
@@ -116,8 +133,8 @@ jobs:
           name: Download and Unzip Project
           command: |
             curl -L -o cordovaProject.zip "<< pipeline.parameters.projectUrl >>"
-            mkdir cordova-project
-            unzip cordovaProject.zip -d cordova-project
+            mkdir -p cordova-project
+            unzip -o cordovaProject.zip -d cordova-project
 
       - run:
           name: Prepare Signing Configuration
@@ -139,9 +156,7 @@ jobs:
           shell: /bin/bash --login -eo pipefail
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
-            # ensure npm global bin is available
-            export PATH=/home/circleci/.npm-global/bin:$PATH
-
+            export PATH=$HOME/.npm-global/bin:$PATH
             cd cordova-project
 
             echo "--- Installing Project Dependencies ---"
