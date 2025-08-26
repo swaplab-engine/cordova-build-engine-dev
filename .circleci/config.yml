@@ -67,10 +67,10 @@ jobs:
           keys:
             - npm-global-v1
       - run:
+          # PERBAIKAN: Menggunakan login shell untuk mengaktifkan NVM
+          shell: /bin/bash --login -eo pipefail
           name: Install Cordova CLI
-          command: |
-            source "$NVM_DIR/nvm.sh"
-            npm install -g cordova
+          command: npm install -g cordova
       - save_cache:
           key: npm-global-v1
           paths:
@@ -98,10 +98,11 @@ jobs:
             fi
 
       - run:
+          # PERBAIKAN: Menggunakan login shell di sini juga
+          shell: /bin/bash --login -eo pipefail
           name: Install Dependencies and Build Project
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
-            source "$NVM_DIR/nvm.sh"
             cd cordova-project
             
             echo "--- Installing Project Dependencies ---"
