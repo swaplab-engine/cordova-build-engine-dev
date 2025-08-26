@@ -35,6 +35,7 @@ parameters:
 jobs:
   build:
     docker:
+      # Image ini sudah menyediakan Node v20.19.4, Java, dan Android SDK.
       - image: cimg/android:2024.07.1
     
     working_directory: ~/project
@@ -61,17 +62,21 @@ jobs:
                 "status": "in_progress"
               }' \
               "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
+      
+      # Cache untuk Cordova CLI global
+      - restore_cache:
+          keys:
+            - cordova-cli-v1
 
       - run:
-          name: "Set Node Version to 20.19.4 & Install Cordova"
+          name: "Install Cordova CLI (if not cached)"
           shell: /bin/bash --login -eo pipefail
-          command: |
-            # Mengunci versi Node.js
-            nvm install 20.19.4
-            nvm alias default 20.19.4
-            echo "Node version set to: $(node -v)"
-            # Install Cordova
-            npm install -g cordova
+          command: npm install -g cordova
+      
+      - save_cache:
+          key: cordova-cli-v1
+          paths:
+            - /home/circleci/.npm-global
       
       - run:
           name: "Download and Unzip Project"
@@ -93,11 +98,11 @@ jobs:
               printf "{ \"android\": { \"release\": { \"keystore\": \"release.jks\", \"storePassword\": \"<< pipeline.parameters.keystorePassword >>\", \"alias\": \"<< pipeline.parameters.keyAlias >>\", \"password\": \"<< pipeline.parameters.keyPassword >>\", \"packageType\": \"%s\" } } }" "$PACKAGE_TYPE" > build.json
             fi
 
-      # PERBAIKAN: Cache ditempatkan di sini, menggunakan kunci yang valid
+      # Cache untuk dependensi proyek (node_modules) dan Gradle
       - restore_cache:
           keys:
-            - npm-v1-{{ checksum "cordova-project/package.json" }}
-            - gradle-v1-{{ checksum "cordova-project/package.json" }}
+            - project-deps-v1-{{ checksum "cordova-project/package.json" }}
+            - project-deps-v1-
 
       - run:
           name: "Install Dependencies and Build Project"
@@ -117,17 +122,13 @@ jobs:
             fi
             echo "--- Cordova Build Finished ---"
 
-      # PERBAIKAN: Menyimpan cache setelah build berhasil
       - save_cache:
-          key: npm-v1-{{ checksum "cordova-project/package.json" }}
+          key: project-deps-v1-{{ checksum "cordova-project/package.json" }}
           paths:
             - cordova-project/node_modules
+            - /home/circleci/.gradle # Simpan cache gradle bersamaan
 
-      - save_cache:
-          key: gradle-v1-{{ checksum "cordova-project/package.json" }}
-          paths:
-            - /home/circleci/.gradle
-
+      # Langkah upload success/fail tetap sama
       - run:
           name: "Upload Build File and Report Success"
           when: on_success
@@ -157,7 +158,7 @@ jobs:
             if [ ! -f "$LOG_CONTENT" ]; then
                 echo "Build failed. Check CircleCI logs for errors." > $LOG_CONTENT
             fi
-            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -F "logFile=@$LOG_CONTENT" -F "buildId=$BUILD_ID" -H "X-Build-secret: $WEBHOOK_SECRET" "$APP_BASE_URL/upload-log/$USER_ID")
+            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -F "logFile=@$LOG_CONTENT" -F "buildId=$BUILD_ID" -H "X-Build-Secret: $WEBHOOK_SECRET" "$APP_BASE_URL/upload-log/$USER_ID")
             HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
             LOG_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
             if [[ "$HTTP_CODE" != "200" ]]; then LOG_URL=""; fi
