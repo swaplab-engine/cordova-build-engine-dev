@@ -99,7 +99,6 @@ jobs:
               if [[ "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
                 PACKAGE_TYPE="bundle"
               fi
-              # PERBAIKAN FINAL: Mengganti 'cat << EOF' dengan 'printf'
               printf "{ \"android\": { \"release\": { \"keystore\": \"release.jks\", \"storePassword\": \"<< pipeline.parameters.keystorePassword >>\", \"alias\": \"<< pipeline.parameters.keyAlias >>\", \"password\": \"<< pipeline.parameters.keyPassword >>\", \"packageType\": \"%s\" } } }" "$PACKAGE_TYPE" > build.json
             fi
 
