@@ -1,0 +1,240 @@
+version: 2.1
+
+# Parameter yang akan diterima dari API call (setara dengan client_payload)
+parameters:
+  userId:
+    type: string
+  buildId:
+    type: string
+  projectUrl:
+    type: string
+  appBaseUrl:
+    type: string
+  buildType:
+    type: string
+    default: "debug-apk"
+  keystoreUrl:
+    type: string
+    default: ""
+  keystorePassword:
+    type: string
+    default: ""
+  keyAlias:
+    type: string
+    default: ""
+  keyPassword:
+    type: string
+    default: ""
+  timeoutMinutes:
+    type: integer
+    default: 8
+
+jobs:
+  build:
+    # Menggunakan Docker image yang sudah memiliki Node.js v20 dan tools dasar
+    # Ini setara dengan `runs-on: ubuntu-latest` dan `actions/setup-node@v4`
+    docker:
+      - image: cimg/node:20.11.1
+    
+    # Menetapkan working directory di dalam container
+    working_directory: ~/project
+
+    # Setara dengan `timeout-minutes` di GitHub Actions
+    no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
+    
+    environment:
+      # Variabel lingkungan untuk diakses di semua langkah
+      USER_ID: << pipeline.parameters.userId >>
+      BUILD_ID: << pipeline.parameters.buildId >>
+      APP_BASE_URL: << pipeline.parameters.appBaseUrl >>
+      BUILD_TYPE: << pipeline.parameters.buildType >>
+
+    steps:
+      # Langkah 1: Mencatat waktu mulai
+      - run:
+          name: Record start time
+          command: echo 'export START_TIME=$(date +%s)' >> $BASH_ENV
+
+      # Langkah 2: Melaporkan status "in_progress"
+      - run:
+          name: Report Build In Progress
+          command: |
+            curl --fail -X POST \
+              -H "Content-Type: application/json" \
+              -H "X-Build-Secret: $WEBHOOK_SECRET" \
+              -d '{
+                "buildId": "<< pipeline.parameters.buildId >>",
+                "userId": "<< pipeline.parameters.userId >>",
+                "status": "in_progress"
+              }' \
+              "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
+              
+      # Langkah 3: Install Java (JDK 17)
+      # Setara dengan `actions/setup-java@v4`
+      - run:
+          name: Set up JDK 17
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y openjdk-17-jdk
+            
+      # Langkah 4: Cache & Install Cordova CLI
+      # Setara dengan `actions/cache` untuk npm global dan `npm install -g cordova`
+      - restore_cache:
+          keys:
+            - npm-global-v1
+      - run:
+          name: Install Cordova CLI
+          command: sudo npm install -g cordova
+      - save_cache:
+          key: npm-global-v1
+          paths:
+            - /usr/local/lib/node_modules
+
+      # Langkah 5: Unduh dan Unzip Proyek
+      - run:
+          name: Download and Unzip Project
+          command: |
+            curl -L -o cordovaProject.zip "<< pipeline.parameters.projectUrl >>"
+            mkdir cordova-project
+            unzip cordovaProject.zip -d cordova-project
+
+      # Langkah 6: Siapkan Konfigurasi Signing (Release)
+      - run:
+          name: Prepare Signing Configuration
+          # `when` di CircleCI setara dengan `if` di GitHub Actions
+          # Kondisi ini akan berjalan jika langkah sebelumnya berhasil
+          when: on_success
+          command: |
+            if [[ "<< pipeline.parameters.buildType >>" == "release-apk" || "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
+              cd cordova-project
+              KEYSTORE_URL="<< pipeline.parameters.keystoreUrl >>"
+              curl -L -o release.jks "$KEYSTORE_URL"
+              PACKAGE_TYPE="apk"
+              if [[ "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
+                PACKAGE_TYPE="bundle"
+              fi
+              cat > build.json << EOF
+              { "android": { "release": { "keystore": "release.jks", "storePassword": "<< pipeline.parameters.keystorePassword >>", "alias": "<< pipeline.parameters.keyAlias >>", "password": "<< pipeline.parameters.keyPassword >>", "packageType": "$PACKAGE_TYPE" } } }
+              EOF
+            fi
+
+      # Langkah 7: Cache Gradle
+      - restore_cache:
+          keys:
+            - gradle-cache-{{ checksum "cordova-project/platforms/android/build.gradle" }}
+            - gradle-cache-
+      
+      # Langkah 8: Install Dependensi & Build Project
+      - run:
+          name: Install Dependencies and Build Project
+          command: |
+            cd cordova-project
+            {
+              echo "--- Installing Project Dependencies ---"
+              npm install
+              echo "--- Adding Android Platform ---"
+              cordova platform add android
+              echo "--- Starting Cordova Build ---"
+              if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
+                cordova build android --debug -- --gradleArg=--no-daemon
+              else
+                cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+              fi
+              echo "--- Cordova Build Finished ---"
+            } > ../build_log.txt 2>&1
+
+      # Langkah 9 (Sukses): Unggah hasil build
+      - run:
+          name: Upload Build File and Report Success
+          when: on_success
+          command: |
+            # Logika ini sama persis dengan yang ada di GitHub Actions Anda
+            ARTIFACT_PATH=""
+            if [[ "$BUILD_TYPE" == "release-aab" ]]; then
+              ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+            elif [[ "$BUILD_TYPE" == "release-apk" ]]; then
+              ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+            else
+              ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+            fi
+            
+            if [ -z "$ARTIFACT_PATH" ]; then echo "Build artifact not found!"; exit 1; fi
+
+            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" --fail -X POST \
+              -F "buildFile=@$ARTIFACT_PATH" \
+              -F "buildId=$BUILD_ID" \
+              -F "buildType=$BUILD_TYPE" \
+              -H "X-Build-Secret: $WEBHOOK_SECRET" \
+              "$APP_BASE_URL/upload-result/$USER_ID")
+            
+            HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
+            DOWNLOAD_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+
+            if [[ "$HTTP_CODE" != "200" ]]; then echo "Gagal upload. Kode: $HTTP_CODE"; exit 1; fi
+
+            end_time=$(date +%s)
+            duration=$((end_time - START_TIME))
+
+            curl --fail -X POST \
+              -H "Content-Type: application/json" \
+              -H "X-Build-Secret: $WEBHOOK_SECRET" \
+              -d '{
+                "buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'",
+                "status": "complete", "durationSeconds": "'"$duration"'", "downloadUrl": "'"$DOWNLOAD_URL"'"
+              }' \
+              "$APP_BASE_URL/api/github-webhook"
+
+      # Langkah 10 (Gagal): Unggah log error
+      - run:
+          name: Upload Log File and Report Failure
+          # `when: on_fail` adalah eksekutor khusus jika ada langkah yang gagal
+          when: on_fail
+          command: |
+            # Logika ini sama persis dengan yang ada di GitHub Actions Anda
+            if [ ! -f "build_log.txt" ]; then
+              echo "Build gagal pada tahap awal. File log tidak ditemukan." > build_log.txt
+            fi
+
+            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              -F "logFile=@build_log.txt" \
+              -F "buildId=$BUILD_ID" \
+              -H "X-Build-Secret: $WEBHOOK_SECRET" \
+              "$APP_BASE_URL/upload-log/$USER_ID")
+            
+            HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
+            LOG_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+
+            if [[ "$HTTP_CODE" != "200" ]]; then LOG_URL=""; fi
+
+            end_time=$(date +%s)
+            duration=$((end_time - START_TIME))
+
+            curl --fail -X POST \
+              -H "Content-Type: application/json" \
+              -H "X-Build-Secret: $WEBHOOK_SECRET" \
+              -d '{
+                "buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'",
+                "status": "failed", "durationSeconds": "'"$duration"'", "logUrl": "'"$LOG_URL"'"
+              }' \
+              "$APP_BASE_URL/api/github-webhook"
+      
+      # Menyimpan cache Gradle setelah build selesai
+      - save_cache:
+          key: gradle-cache-{{ checksum "cordova-project/platforms/android/build.gradle" }}
+          paths:
+            - ~/.gradle
+
+# Mendefinisikan alur kerja
+workflows:
+  build_cordova_app:
+    jobs:
+      - build:
+          # `when` di level workflow memastikan pipeline ini hanya berjalan jika dipicu oleh API
+          # `unless: << pipeline.git.tag >>` dan `unless: << pipeline.git.branch >>` mencegah trigger dari git push/tag biasa
+          when:
+            and:
+              - not:
+                  or:
+                    - equal: [ master, << pipeline.git.branch >> ]
+                    - equal: [ main, << pipeline.git.branch >> ]
+              - << pipeline.parameters.buildId >>
