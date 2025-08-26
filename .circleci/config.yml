@@ -36,7 +36,7 @@ jobs:
   build:
     docker:
       - image: cimg/android:2024.07.1
-    
+
     working_directory: ~/project
 
     environment:
@@ -44,14 +44,24 @@ jobs:
       BUILD_ID: << pipeline.parameters.buildId >>
       APP_BASE_URL: << pipeline.parameters.appBaseUrl >>
       BUILD_TYPE: << pipeline.parameters.buildType >>
+      # jangan overwrite PATH di sini — biarkan shell default tersedia
+      ANDROID_SDK_ROOT: /home/circleci/android-sdk
+      ANDROID_HOME: /home/circleci/android-sdk
 
     steps:
-      - checkout
+      - run:
+          name: "Record start time"
+          command: echo 'export START_TIME=$(/bin/date +%s)' >> $BASH_ENV
 
       - run:
-          name: Report Build In Progress
+          name: "Report Build In Progress"
           command: |
-            curl --fail -X POST \
+            CURL=$(command -v curl || true)
+            if [ -z "$CURL" ]; then
+              echo "curl not found in PATH: $PATH"
+              exit 1
+            fi
+            $CURL --fail -X POST \
               -H "Content-Type: application/json" \
               -H "X-Build-Secret: $WEBHOOK_SECRET" \
               -d '{
@@ -61,61 +71,163 @@ jobs:
               }' \
               "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
 
-      - run:
-          name: Install Cordova CLI & Set Node Version
-          shell: /bin/bash --login -eo pipefail
-          command: |
-            # PERBAIKAN: Mengunci versi Node.js
-            nvm install 20.19.4
-            nvm alias default 20.19.4
-            npm install -g cordova
+      - restore_cache:
+          keys:
+            - nvm-v1-{{ checksum "package.json" }}
+            - gradle-cache-v1-{{ checksum "cordova-project/platforms/android/app/build.gradle" }}
 
       - run:
-          name: Download and Unzip Project
+          name: "Install Node.js (via nvm)"
+          shell: /bin/bash -eo pipefail
+          command: |
+            set -eu
+            echo "=== debug system info ==="
+            whoami || true
+            if [ -f /etc/os-release ]; then cat /etc/os-release; fi
+            echo "Has apt-get? $(command -v apt-get >/dev/null 2>&1 && echo yes || echo no)"
+            echo "========================="
+
+            export NVM_DIR="$HOME/.nvm"
+            if [ ! -d "$NVM_DIR" ]; then
+              curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
+            fi
+
+            # load nvm for this shell and install/use node 20
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm install 20 || nvm use 20
+            nvm alias default 20
+
+            echo "node: $(node -v || echo not-found)"
+            echo "npm:  $(npm -v || echo not-found)"
+
+            # persist NVM load for subsequent steps
+            echo 'export NVM_DIR="$HOME/.nvm"' >> $BASH_ENV
+            echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' >> $BASH_ENV
+
+      - run:
+          name: "Install Cordova CLI (global)"
+          shell: /bin/bash -eo pipefail
+          command: |
+            set -eu
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+            # ignore conflicting npm prefix if present
+            nvm use --delete-prefix v20 --silent || nvm use --delete-prefix 20 --silent || true
+
+            # remove problematic lines from ~/.npmrc if any
+            if [ -f "$HOME/.npmrc" ]; then
+              sed -i '/^\s*prefix\s*=/d' "$HOME/.npmrc" || true
+              sed -i '/^\s*globalconfig\s*=/d' "$HOME/.npmrc" || true
+            fi
+
+            echo "node: $(command -v node || echo not-found) $(node -v || true)"
+            echo "npm:  $(command -v npm || echo not-found) $(npm -v || true)"
+
+            npm install -g cordova --no-audit --no-fund
+            echo "cordova: $(command -v cordova || echo not-found) $(cordova -v || true)"
+
+      - save_cache:
+          key: nvm-v1-{{ checksum "package.json" }}
+          paths:
+            - ~/.nvm
+            - ~/.npm
+            - ~/.cache/npm
+
+      - run:
+          name: "Ensure Android SDK components required (platform 35 + build-tools 35.0.0)"
+          shell: /bin/bash -eo pipefail
+          command: |
+            set -eux
+
+            export ANDROID_SDK_ROOT=/home/circleci/android-sdk
+            export PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH
+
+            echo "SDK root: $ANDROID_SDK_ROOT"
+            echo "PATH: $PATH"
+
+            # If sdkmanager missing, download commandline tools
+            if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+              echo "cmdline-tools not found — installing commandlinetools..."
+              mkdir -p /tmp/cmdline
+              cd /tmp/cmdline
+              curl -fsSL -o commandlinetools.zip "https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip"
+              mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+              unzip -q commandlinetools.zip
+              mkdir -p $ANDROID_SDK_ROOT/cmdline-tools/latest
+              mv cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/latest/ || true
+              cd -
+            fi
+
+            sdkmanager --version || true
+
+            # accept licenses
+            yes | sdkmanager --licenses || true
+
+            # install required components
+            sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" || true
+
+            echo "Installed build-tools versions:"
+            ls -la $ANDROID_SDK_ROOT/build-tools || true
+            echo "Installed platforms:"
+            ls -la $ANDROID_SDK_ROOT/platforms || true
+
+      - run:
+          name: "Debug: verify Android build tools and sdkmanager"
+          shell: /bin/bash -eo pipefail
+          command: |
+            export ANDROID_SDK_ROOT=/home/circleci/android-sdk
+            echo "sdkmanager path: $(command -v sdkmanager || echo not-found)"
+            sdkmanager --list || true
+            echo "build-tools contents:"
+            ls -la $ANDROID_SDK_ROOT/build-tools || true
+            echo "platforms contents:"
+            ls -la $ANDROID_SDK_ROOT/platforms || true
+
+      - run:
+          name: "Download and Unzip Project"
+          shell: /bin/bash -eo pipefail
           command: |
             curl -L -o cordovaProject.zip "<< pipeline.parameters.projectUrl >>"
-            mkdir cordova-project
+            mkdir -p cordova-project
             unzip -o cordovaProject.zip -d cordova-project
 
       - run:
-          name: Prepare Signing Configuration
+          name: "Prepare Signing Configuration"
+          shell: /bin/bash -eo pipefail
           command: |
             if [[ "<< pipeline.parameters.buildType >>" == "release-apk" || "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
               cd cordova-project
-              curl -L -o release.jks "<< pipeline.parameters.keystoreUrl >>"
+              KEYSTORE_URL="<< pipeline.parameters.keystoreUrl >>"
+              curl -L -o release.jks "$KEYSTORE_URL"
               PACKAGE_TYPE="apk"
               if [[ "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
                 PACKAGE_TYPE="bundle"
               fi
               printf "{ \"android\": { \"release\": { \"keystore\": \"release.jks\", \"storePassword\": \"<< pipeline.parameters.keystorePassword >>\", \"alias\": \"<< pipeline.parameters.keyAlias >>\", \"password\": \"<< pipeline.parameters.keyPassword >>\", \"packageType\": \"%s\" } } }" "$PACKAGE_TYPE" > build.json
             fi
-      
-      # PERBAIKAN: Menambahkan langkah-langkah cache
-      - restore_cache:
-          name: Restore NPM Cache
-          keys:
-            - npm-v1-{{ checksum "cordova-project/package.json" }}
-            - npm-v1-
-
-      - restore_cache:
-          name: Restore Gradle Cache
-          keys:
-            - gradle-v1-{{ checksum "cordova-project/package.json" }}
-            - gradle-v1-
 
       - run:
-          name: Install Dependencies and Build Project
-          shell: /bin/bash --login -eo pipefail
+          name: "Install Dependencies and Build Project"
+          shell: /bin/bash -eo pipefail
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
+            set -eux
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm use 20 || true
+
+            export ANDROID_SDK_ROOT=/home/circleci/android-sdk
+            export PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH
+
             cd cordova-project
-            
+
             echo "--- Installing Project Dependencies ---"
             npm install
-            
+
             echo "--- Adding Android Platform ---"
-            cordova platform add android
-            
+            cordova platform add android || true
+
             echo "--- Starting Cordova Build ---"
             if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
               cordova build android --debug -- --gradleArg=--no-daemon
@@ -124,23 +236,16 @@ jobs:
             fi
             echo "--- Cordova Build Finished ---"
 
-      # PERBAIKAN: Menyimpan cache setelah build berhasil
       - save_cache:
-          name: Save NPM Cache
-          key: npm-v1-{{ checksum "cordova-project/package.json" }}
+          key: gradle-cache-v1-{{ checksum "cordova-project/platforms/android/app/build.gradle" }}
           paths:
-            - cordova-project/node_modules
-
-      - save_cache:
-          name: Save Gradle Cache
-          # Kita gunakan package-lock.json di sini karena sudah pasti ada setelah npm install
-          key: gradle-v1-{{ checksum "cordova-project/package-lock.json" }}
-          paths:
-            - /home/circleci/.gradle
+            - /home/circleci/.gradle/caches
+            - /home/circleci/.gradle/wrapper
 
       - run:
-          name: Upload Build File and Report Success
+          name: "Upload Build File and Report Success"
           when: on_success
+          shell: /bin/bash -eo pipefail
           command: |
             ARTIFACT_PATH=""
             if [[ "$BUILD_TYPE" == "release-aab" ]]; then
@@ -150,7 +255,7 @@ jobs:
             else
               ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
             fi
-            
+
             if [ -z "$ARTIFACT_PATH" ]; then echo "Build artifact not found!"; exit 1; fi
 
             UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" --fail -X POST \
@@ -159,7 +264,7 @@ jobs:
               -F "buildType=$BUILD_TYPE" \
               -H "X-Build-Secret: $WEBHOOK_SECRET" \
               "$APP_BASE_URL/upload-result/$USER_ID")
-            
+
             HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
             DOWNLOAD_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
 
@@ -178,20 +283,21 @@ jobs:
               "$APP_BASE_URL/api/github-webhook"
 
       - run:
-          name: Upload Log File and Report Failure
+          name: "Upload Log File and Report Failure"
           when: on_fail
+          shell: /bin/bash -eo pipefail
           command: |
             LOG_CONTENT="build_log.txt"
             if [ ! -f "$LOG_CONTENT" ]; then
                 echo "Build failed before generating a detailed log. Please check the CircleCI logs for errors." > $LOG_CONTENT
             fi
-            
+
             UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
               -F "logFile=@$LOG_CONTENT" \
               -F "buildId=$BUILD_ID" \
               -H "X-Build-Secret: $WEBHOOK_SECRET" \
               "$APP_BASE_URL/upload-log/$USER_ID")
-            
+
             HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
             LOG_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
 
