@@ -68,13 +68,12 @@ jobs:
 
       - run:
           name: "Install Cordova CLI (if not cached)"
-          # PERBAIKAN: Menambahkan 'sudo' untuk mengatasi masalah perizinan EACCES
           command: sudo npm install -g cordova
       
       - save_cache:
           key: cordova-cli-v2
           paths:
-            - /usr/local/lib/node_modules # Path default untuk instalasi global dengan sudo
+            - /usr/local/lib/node_modules
 
       - run:
           name: "Download and Unzip Project"
@@ -108,14 +107,18 @@ jobs:
             cd cordova-project
             echo "--- Installing Project Dependencies ---"
             npm install
+            
             echo "--- Adding Android Platform ---"
-            # Menjalankan sebagai 'circleci' user, bukan root
-            sudo --user=circleci --login cordova platform add android
+            # PERBAIKAN: Menghapus 'sudo --user=circleci --login'
+            cordova platform add android
+            
             echo "--- Starting Cordova Build ---"
             if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
-              sudo --user=circleci --login cordova build android --debug -- --gradleArg=--no-daemon
+              # PERBAIKAN: Menghapus 'sudo --user=circleci --login'
+              cordova build android --debug -- --gradleArg=--no-daemon
             else
-              sudo --user=circleci --login cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+              # PERBAIKAN: Menghapus 'sudo --user=circleci --login'
+              cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
             fi
             echo "--- Cordova Build Finished ---"
 
