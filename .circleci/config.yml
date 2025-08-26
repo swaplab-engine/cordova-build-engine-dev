@@ -32,16 +32,12 @@ parameters:
 jobs:
   build:
     # Menggunakan Docker image yang sudah memiliki Node.js v20 dan tools dasar
-    # Ini setara dengan `runs-on: ubuntu-latest` dan `actions/setup-node@v4`
     docker:
       - image: cimg/node:20.11.1
     
     # Menetapkan working directory di dalam container
     working_directory: ~/project
 
-    # Setara dengan `timeout-minutes` di GitHub Actions
-    no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
-    
     environment:
       # Variabel lingkungan untuk diakses di semua langkah
       USER_ID: << pipeline.parameters.userId >>
@@ -70,7 +66,6 @@ jobs:
               "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
               
       # Langkah 3: Install Java (JDK 17)
-      # Setara dengan `actions/setup-java@v4`
       - run:
           name: Set up JDK 17
           command: |
@@ -78,7 +73,6 @@ jobs:
             sudo apt-get install -y openjdk-17-jdk
             
       # Langkah 4: Cache & Install Cordova CLI
-      # Setara dengan `actions/cache` untuk npm global dan `npm install -g cordova`
       - restore_cache:
           keys:
             - npm-global-v1
@@ -101,8 +95,6 @@ jobs:
       # Langkah 6: Siapkan Konfigurasi Signing (Release)
       - run:
           name: Prepare Signing Configuration
-          # `when` di CircleCI setara dengan `if` di GitHub Actions
-          # Kondisi ini akan berjalan jika langkah sebelumnya berhasil
           when: on_success
           command: |
             if [[ "<< pipeline.parameters.buildType >>" == "release-apk" || "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
@@ -127,6 +119,8 @@ jobs:
       # Langkah 8: Install Dependensi & Build Project
       - run:
           name: Install Dependencies and Build Project
+          # PERBAIKAN: Timeout dipindahkan ke sini
+          no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
             cd cordova-project
             {
@@ -148,7 +142,6 @@ jobs:
           name: Upload Build File and Report Success
           when: on_success
           command: |
-            # Logika ini sama persis dengan yang ada di GitHub Actions Anda
             ARTIFACT_PATH=""
             if [[ "$BUILD_TYPE" == "release-aab" ]]; then
               ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
@@ -187,10 +180,8 @@ jobs:
       # Langkah 10 (Gagal): Unggah log error
       - run:
           name: Upload Log File and Report Failure
-          # `when: on_fail` adalah eksekutor khusus jika ada langkah yang gagal
           when: on_fail
           command: |
-            # Logika ini sama persis dengan yang ada di GitHub Actions Anda
             if [ ! -f "build_log.txt" ]; then
               echo "Build gagal pada tahap awal. File log tidak ditemukan." > build_log.txt
             fi
@@ -229,8 +220,6 @@ workflows:
   build_cordova_app:
     jobs:
       - build:
-          # `when` di level workflow memastikan pipeline ini hanya berjalan jika dipicu oleh API
-          # `unless: << pipeline.git.tag >>` dan `unless: << pipeline.git.branch >>` mencegah trigger dari git push/tag biasa
           when:
             and:
               - not:
