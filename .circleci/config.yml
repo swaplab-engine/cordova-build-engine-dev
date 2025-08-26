@@ -34,6 +34,9 @@ parameters:
 
 jobs:
   build:
+    # PERBAIKAN: Mengaktifkan cache untuk image Docker itu sendiri
+    docker_layer_caching: true
+
     docker:
       - image: cimg/android:2024.11.1-node
     
@@ -109,12 +112,9 @@ jobs:
             npm install
             echo "--- Adding Android Platform ---"
             cordova platform add android
-
             echo "--- Installing Android Build Tools 35.0.0 ---"
-            # PERBAIKAN: Menambahkan '|| true' untuk mengatasi error SIGPIPE (exit 141)
             yes | sdkmanager --licenses > /dev/null || true
             sdkmanager "build-tools;35.0.0"
-
             echo "--- Starting Cordova Build ---"
             if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
               cordova build android --debug -- --gradleArg=--no-daemon
