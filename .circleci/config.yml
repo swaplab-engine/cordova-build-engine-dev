@@ -44,19 +44,24 @@ jobs:
       BUILD_ID: << pipeline.parameters.buildId >>
       APP_BASE_URL: << pipeline.parameters.appBaseUrl >>
       BUILD_TYPE: << pipeline.parameters.buildType >>
+      # jangan overwrite PATH di sini — biarkan shell default tersedia
       ANDROID_SDK_ROOT: /home/circleci/android-sdk
       ANDROID_HOME: /home/circleci/android-sdk
-      PATH: /home/circleci/android-sdk/cmdline-tools/latest/bin:/home/circleci/android-sdk/platform-tools:/home/circleci/.nvm/versions/node/v20.19.4/bin:$PATH
 
     steps:
       - run:
-          name: Record start time
-          command: echo 'export START_TIME=$(date +%s)' >> $BASH_ENV
+          name: "Record start time"
+          command: echo 'export START_TIME=$(/bin/date +%s)' >> $BASH_ENV
 
       - run:
-          name: Report Build In Progress
+          name: "Report Build In Progress"
           command: |
-            curl --fail -X POST \
+            CURL=$(command -v curl || true)
+            if [ -z "$CURL" ]; then
+              echo "curl not found in PATH: $PATH"
+              exit 1
+            fi
+            $CURL --fail -X POST \
               -H "Content-Type: application/json" \
               -H "X-Build-Secret: $WEBHOOK_SECRET" \
               -d '{
@@ -72,7 +77,7 @@ jobs:
             - gradle-cache-v1-{{ checksum "cordova-project/platforms/android/app/build.gradle" }}
 
       - run:
-          name: Install Node.js (via nvm)
+          name: "Install Node.js (via nvm)"
           shell: /bin/bash -eo pipefail
           command: |
             set -eu
@@ -87,6 +92,7 @@ jobs:
               curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
             fi
 
+            # load nvm for this shell and install/use node 20
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
             nvm install 20 || nvm use 20
             nvm alias default 20
@@ -94,18 +100,22 @@ jobs:
             echo "node: $(node -v || echo not-found)"
             echo "npm:  $(npm -v || echo not-found)"
 
+            # persist NVM load for subsequent steps
             echo 'export NVM_DIR="$HOME/.nvm"' >> $BASH_ENV
             echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' >> $BASH_ENV
 
       - run:
-          name: Install Cordova CLI (global) — handle npmrc/prefix
+          name: "Install Cordova CLI (global)"
           shell: /bin/bash -eo pipefail
           command: |
             set -eu
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+            # ignore conflicting npm prefix if present
             nvm use --delete-prefix v20 --silent || nvm use --delete-prefix 20 --silent || true
 
+            # remove problematic lines from ~/.npmrc if any
             if [ -f "$HOME/.npmrc" ]; then
               sed -i '/^\s*prefix\s*=/d' "$HOME/.npmrc" || true
               sed -i '/^\s*globalconfig\s*=/d' "$HOME/.npmrc" || true
@@ -125,7 +135,7 @@ jobs:
             - ~/.cache/npm
 
       - run:
-          name: Ensure Android SDK components required (platform 35 + build-tools 35.0.0)
+          name: "Ensure Android SDK components required (platform 35 + build-tools 35.0.0)"
           shell: /bin/bash -eo pipefail
           command: |
             set -eux
@@ -136,6 +146,7 @@ jobs:
             echo "SDK root: $ANDROID_SDK_ROOT"
             echo "PATH: $PATH"
 
+            # If sdkmanager missing, download commandline tools
             if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
               echo "cmdline-tools not found — installing commandlinetools..."
               mkdir -p /tmp/cmdline
@@ -149,8 +160,13 @@ jobs:
             fi
 
             sdkmanager --version || true
+
+            # accept licenses
             yes | sdkmanager --licenses || true
-            sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+            # install required components
+            sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" || true
+
             echo "Installed build-tools versions:"
             ls -la $ANDROID_SDK_ROOT/build-tools || true
             echo "Installed platforms:"
@@ -160,6 +176,7 @@ jobs:
           name: "Debug: verify Android build tools and sdkmanager"
           shell: /bin/bash -eo pipefail
           command: |
+            export ANDROID_SDK_ROOT=/home/circleci/android-sdk
             echo "sdkmanager path: $(command -v sdkmanager || echo not-found)"
             sdkmanager --list || true
             echo "build-tools contents:"
@@ -168,7 +185,7 @@ jobs:
             ls -la $ANDROID_SDK_ROOT/platforms || true
 
       - run:
-          name: Download and Unzip Project
+          name: "Download and Unzip Project"
           shell: /bin/bash -eo pipefail
           command: |
             curl -L -o cordovaProject.zip "<< pipeline.parameters.projectUrl >>"
@@ -176,7 +193,7 @@ jobs:
             unzip -o cordovaProject.zip -d cordova-project
 
       - run:
-          name: Prepare Signing Configuration
+          name: "Prepare Signing Configuration"
           shell: /bin/bash -eo pipefail
           command: |
             if [[ "<< pipeline.parameters.buildType >>" == "release-apk" || "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
@@ -191,7 +208,7 @@ jobs:
             fi
 
       - run:
-          name: Install Dependencies and Build Project
+          name: "Install Dependencies and Build Project"
           shell: /bin/bash -eo pipefail
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
@@ -226,7 +243,7 @@ jobs:
             - /home/circleci/.gradle/wrapper
 
       - run:
-          name: Upload Build File and Report Success
+          name: "Upload Build File and Report Success"
           when: on_success
           shell: /bin/bash -eo pipefail
           command: |
@@ -266,7 +283,7 @@ jobs:
               "$APP_BASE_URL/api/github-webhook"
 
       - run:
-          name: Upload Log File and Report Failure
+          name: "Upload Log File and Report Failure"
           when: on_fail
           shell: /bin/bash -eo pipefail
           command: |
