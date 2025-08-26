@@ -203,13 +203,7 @@ jobs:
 
 workflows:
   build_cordova_app:
-    # PERBAIKAN: 'when' dipindahkan ke sini, sejajar dengan 'jobs'
-    when:
-      and:
-        - not:
-            or:
-              - equal: [ master, << pipeline.git.branch >> ]
-              - equal: [ main, << pipeline.git.branch >> ]
-        - << pipeline.parameters.buildId >>
+    # PERBAIKAN FINAL: Kondisi disederhanakan agar hanya berjalan jika dipicu oleh API
+    when: << pipeline.parameters.buildId >>
     jobs:
       - build
