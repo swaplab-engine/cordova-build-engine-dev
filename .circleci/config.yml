@@ -44,7 +44,6 @@ jobs:
       BUILD_ID: << pipeline.parameters.buildId >>
       APP_BASE_URL: << pipeline.parameters.appBaseUrl >>
       BUILD_TYPE: << pipeline.parameters.buildType >>
-      # pastikan SDK root sama seperti yang dilaporkan Gradle
       ANDROID_SDK_ROOT: /home/circleci/android-sdk
       ANDROID_HOME: /home/circleci/android-sdk
       PATH: /home/circleci/android-sdk/cmdline-tools/latest/bin:/home/circleci/android-sdk/platform-tools:/home/circleci/.nvm/versions/node/v20.19.4/bin:$PATH
@@ -72,9 +71,58 @@ jobs:
             - nvm-v1-{{ checksum "package.json" }}
             - gradle-cache-v1-{{ checksum "cordova-project/platforms/android/app/build.gradle" }}
 
-      # ---------- previous steps to install nvm/node/cordova left out for brevity ----------
-      # assume you already have the nvm/node/cordova steps from the earlier config we used
-      # Insert your Node/nvm/Cordova install steps here (or reuse earlier config)
+      - run:
+          name: Install Node.js (via nvm)
+          shell: /bin/bash -eo pipefail
+          command: |
+            set -eu
+            echo "=== debug system info ==="
+            whoami || true
+            if [ -f /etc/os-release ]; then cat /etc/os-release; fi
+            echo "Has apt-get? $(command -v apt-get >/dev/null 2>&1 && echo yes || echo no)"
+            echo "========================="
+
+            export NVM_DIR="$HOME/.nvm"
+            if [ ! -d "$NVM_DIR" ]; then
+              curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
+            fi
+
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm install 20 || nvm use 20
+            nvm alias default 20
+
+            echo "node: $(node -v || echo not-found)"
+            echo "npm:  $(npm -v || echo not-found)"
+
+            echo 'export NVM_DIR="$HOME/.nvm"' >> $BASH_ENV
+            echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' >> $BASH_ENV
+
+      - run:
+          name: Install Cordova CLI (global) — handle npmrc/prefix
+          shell: /bin/bash -eo pipefail
+          command: |
+            set -eu
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm use --delete-prefix v20 --silent || nvm use --delete-prefix 20 --silent || true
+
+            if [ -f "$HOME/.npmrc" ]; then
+              sed -i '/^\s*prefix\s*=/d' "$HOME/.npmrc" || true
+              sed -i '/^\s*globalconfig\s*=/d' "$HOME/.npmrc" || true
+            fi
+
+            echo "node: $(command -v node || echo not-found) $(node -v || true)"
+            echo "npm:  $(command -v npm || echo not-found) $(npm -v || true)"
+
+            npm install -g cordova --no-audit --no-fund
+            echo "cordova: $(command -v cordova || echo not-found) $(cordova -v || true)"
+
+      - save_cache:
+          key: nvm-v1-{{ checksum "package.json" }}
+          paths:
+            - ~/.nvm
+            - ~/.npm
+            - ~/.cache/npm
 
       - run:
           name: Ensure Android SDK components required (platform 35 + build-tools 35.0.0)
@@ -88,38 +136,28 @@ jobs:
             echo "SDK root: $ANDROID_SDK_ROOT"
             echo "PATH: $PATH"
 
-            # If sdkmanager doesn't exist, install command-line tools to $ANDROID_SDK_ROOT/cmdline-tools/latest
             if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
               echo "cmdline-tools not found — installing commandlinetools..."
               mkdir -p /tmp/cmdline
               cd /tmp/cmdline
-              # download latest command line tools (use generic latest URL)
               curl -fsSL -o commandlinetools.zip "https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip"
               mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
               unzip -q commandlinetools.zip
-              # The zip usually contains a folder 'cmdline-tools'; move into latest
               mkdir -p $ANDROID_SDK_ROOT/cmdline-tools/latest
               mv cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/latest/ || true
               cd -
             fi
 
             sdkmanager --version || true
-
-            # Accept licenses non-interactively
             yes | sdkmanager --licenses || true
-
-            # Install required platform and build-tools version (35 and 35.0.0)
-            # Also ensure platform-tools present
             sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
             echo "Installed build-tools versions:"
             ls -la $ANDROID_SDK_ROOT/build-tools || true
-
             echo "Installed platforms:"
             ls -la $ANDROID_SDK_ROOT/platforms || true
 
       - run:
-          name: Debug: verify Android build tools and sdkmanager
+          name: "Debug: verify Android build tools and sdkmanager"
           shell: /bin/bash -eo pipefail
           command: |
             echo "sdkmanager path: $(command -v sdkmanager || echo not-found)"
@@ -158,7 +196,6 @@ jobs:
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
             set -eux
-            # source nvm in case needed (from earlier steps)
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
             nvm use 20 || true
