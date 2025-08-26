@@ -107,17 +107,18 @@ jobs:
             cd cordova-project
             echo "--- Installing Project Dependencies ---"
             npm install
-            
             echo "--- Adding Android Platform ---"
-            # PERBAIKAN: Menghapus 'sudo --user=circleci --login'
             cordova platform add android
-            
+
+            # PERBAIKAN: Install versi build-tools yang benar dan terima lisensi
+            echo "--- Installing Android Build Tools 35.0.0 ---"
+            yes | sdkmanager --licenses > /dev/null
+            sdkmanager "build-tools;35.0.0"
+
             echo "--- Starting Cordova Build ---"
             if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
-              # PERBAIKAN: Menghapus 'sudo --user=circleci --login'
               cordova build android --debug -- --gradleArg=--no-daemon
             else
-              # PERBAIKAN: Menghapus 'sudo --user=circleci --login'
               cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
             fi
             echo "--- Cordova Build Finished ---"
