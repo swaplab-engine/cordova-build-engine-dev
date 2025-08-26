@@ -65,72 +65,71 @@ jobs:
 
       - restore_cache:
           keys:
-            - npm-global-v1
+            - nvm-v1-{{ checksum "package.json" }}
+            - gradle-cache-v1-{{ checksum "cordova-project/platforms/android/app/build.gradle" }}
 
       - run:
-          name: Install Node.js (via nvm) and configure npm prefix
-          # note: no --login here so BASH_ENV works consistently
+          name: Install Node.js (via nvm)
           shell: /bin/bash -eo pipefail
           command: |
             set -eu
-
-            echo "=== Debug: system info ==="
+            echo "=== debug system info ==="
             whoami || true
-            uname -a || true
             if [ -f /etc/os-release ]; then cat /etc/os-release; fi
-            echo "Has sudo? $(command -v sudo >/dev/null 2>&1 && echo yes || echo no)"
             echo "Has apt-get? $(command -v apt-get >/dev/null 2>&1 && echo yes || echo no)"
-            echo "==========================="
+            echo "========================="
 
-            # install nvm (user-local)
             export NVM_DIR="$HOME/.nvm"
             if [ ! -d "$NVM_DIR" ]; then
               curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
             fi
 
-            # load nvm in this shell and install node 20
+            # load nvm for this shell and install/use node 20
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
             nvm install 20 || nvm use 20
             nvm alias default 20
 
-            node -v || true
-            npm -v || true
+            echo "node: $(node -v || echo not-found)"
+            echo "npm:  $(npm -v || echo not-found)"
 
-            # configure npm global prefix so `npm -g` doesn't require sudo
-            mkdir -p "$HOME/.npm-global"
-            npm config set prefix "$HOME/.npm-global"
-
-            # persist PATH for subsequent steps via BASH_ENV
-            echo 'export PATH=$HOME/.npm-global/bin:$PATH' >> $BASH_ENV
+            # Persist NVM loading for subsequent steps
             echo 'export NVM_DIR="$HOME/.nvm"' >> $BASH_ENV
             echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' >> $BASH_ENV
 
-            echo "npm prefix: $(npm config get prefix || echo unknown)"
-            echo "PATH now: $PATH"
-
       - run:
-          name: Install Cordova CLI (global)
+          name: Install Cordova CLI (global) — handle npmrc/prefix
           shell: /bin/bash -eo pipefail
           command: |
-            # ensure BASH_ENV is sourced (CircleCI will do it for non-login shells),
-            # but explicitly source nvm to be safe
+            set -eu
+
+            # source nvm (in case BASH_ENV not loaded yet)
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            nvm use 20 || true
 
-            export PATH=$HOME/.npm-global/bin:$PATH
+            # Force nvm to ignore any existing npm prefix that conflicts
+            # try multiple ways (version could be v20.x.y or just 20)
+            nvm use --delete-prefix v20 --silent || nvm use --delete-prefix 20 --silent || true
 
+            # Remove any prefix/globalconfig lines from ~/.npmrc to avoid nvm clashes
+            if [ -f "$HOME/.npmrc" ]; then
+              sed -i '/^\s*prefix\s*=/d' "$HOME/.npmrc" || true
+              sed -i '/^\s*globalconfig\s*=/d' "$HOME/.npmrc" || true
+            fi
+
+            # ensure npm is available
             echo "node: $(command -v node || echo not-found) $(node -v || true)"
             echo "npm:  $(command -v npm || echo not-found) $(npm -v || true)"
 
+            # install cordova globally using npm from nvm
             npm install -g cordova --no-audit --no-fund
-            cordova -v || true
-            ls -la $HOME/.npm-global/bin || true
+            echo "cordova: $(command -v cordova || echo not-found) $(cordova -v || true)"
 
       - save_cache:
-          key: npm-global-v1
+          key: nvm-v1-{{ checksum "package.json" }}
           paths:
-            - /home/circleci/.npm-global
+            - ~/.nvm
+            - ~/.npm
+            - ~/.cache/npm
 
       - run:
           name: Download and Unzip Project
@@ -160,11 +159,11 @@ jobs:
           shell: /bin/bash -eo pipefail
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
-            # ensure nvm and npm global bin are loaded
+            set -eu
+            # ensure nvm is loaded
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
             nvm use 20 || true
-            export PATH=$HOME/.npm-global/bin:$PATH
 
             cd cordova-project
 
