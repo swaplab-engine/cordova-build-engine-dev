@@ -4,12 +4,16 @@ version: 2.1
 parameters:
   userId:
     type: string
+    default: "" # TAMBAHKAN INI
   buildId:
     type: string
+    default: "" # TAMBAHKAN INI
   projectUrl:
     type: string
+    default: "" # TAMBAHKAN INI
   appBaseUrl:
     type: string
+    default: "" # TAMBAHKAN INI
   buildType:
     type: string
     default: "debug-apk"
