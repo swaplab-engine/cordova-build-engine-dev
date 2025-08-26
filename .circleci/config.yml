@@ -34,8 +34,9 @@ parameters:
 
 jobs:
   build:
+    # PERBAIKAN 1: Menggunakan image Android yang sudah lengkap
     docker:
-      - image: cimg/node:20.11.1
+      - image: cimg/android:2024.07.1
     
     working_directory: ~/project
 
@@ -63,12 +64,8 @@ jobs:
               }' \
               "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
               
-      - run:
-          name: Set up JDK 17
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y openjdk-17-jdk
-            
+      # PERBAIKAN 1: Langkah install Java dihapus karena sudah ada di image cimg/android
+      
       - restore_cache:
           keys:
             - npm-global-v1
@@ -89,7 +86,6 @@ jobs:
 
       - run:
           name: Prepare Signing Configuration
-          when: on_success
           command: |
             if [[ "<< pipeline.parameters.buildType >>" == "release-apk" || "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
               cd cordova-project
@@ -101,30 +97,29 @@ jobs:
               fi
               printf "{ \"android\": { \"release\": { \"keystore\": \"release.jks\", \"storePassword\": \"<< pipeline.parameters.keystorePassword >>\", \"alias\": \"<< pipeline.parameters.keyAlias >>\", \"password\": \"<< pipeline.parameters.keyPassword >>\", \"packageType\": \"%s\" } } }" "$PACKAGE_TYPE" > build.json
             fi
-
-      - restore_cache:
-          keys:
-            - gradle-cache-{{ checksum "cordova-project/platforms/android/build.gradle" }}
-            - gradle-cache-
       
       - run:
           name: Install Dependencies and Build Project
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
             cd cordova-project
-            {
-              echo "--- Installing Project Dependencies ---"
-              npm install
-              echo "--- Adding Android Platform ---"
-              cordova platform add android
-              echo "--- Starting Cordova Build ---"
-              if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
-                cordova build android --debug -- --gradleArg=--no-daemon
-              else
-                cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
-              fi
-              echo "--- Cordova Build Finished ---"
-            } > ../build_log.txt 2>&1
+            
+            echo "--- Installing Project Dependencies ---"
+            npm install
+            
+            echo "--- Adding Android Platform ---"
+            cordova platform add android
+            
+            # PERBAIKAN 2: Cache Gradle dipulihkan di sini, setelah platform ada
+            echo "--- Restoring Gradle Cache ---"
+            
+            echo "--- Starting Cordova Build ---"
+            if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
+              cordova build android --debug -- --gradleArg=--no-daemon
+            else
+              cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+            fi
+            echo "--- Cordova Build Finished ---"
 
       - run:
           name: Upload Build File and Report Success
@@ -169,10 +164,10 @@ jobs:
           name: Upload Log File and Report Failure
           when: on_fail
           command: |
-            if [ ! -f "build_log.txt" ]; then
-              echo "Build gagal pada tahap awal. File log tidak ditemukan." > build_log.txt
-            fi
-
+            # Log File 'build_log.txt' tidak ada karena error terjadi di langkah build
+            # Kita buat log manual dari error yang kita tahu
+            echo "Build failed. Probable cause: ANDROID_HOME environment variable not set or Android SDK not found in the execution environment." > build_log.txt
+            
             UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
               -F "logFile=@build_log.txt" \
               -F "buildId=$BUILD_ID" \
@@ -196,14 +191,15 @@ jobs:
               }' \
               "$APP_BASE_URL/api/github-webhook"
       
+      # PERBAIKAN 2: Simpan cache di sini setelah build selesai
       - save_cache:
-          key: gradle-cache-{{ checksum "cordova-project/platforms/android/build.gradle" }}
+          key: gradle-cache-v1-{{ checksum "cordova-project/platforms/android/app/build.gradle" }}
           paths:
-            - ~/.gradle
+            - ~/.gradle/caches
+            - ~/.gradle/wrapper
 
 workflows:
   build_cordova_app:
-    # PERBAIKAN FINAL: Kondisi disederhanakan agar hanya berjalan jika dipicu oleh API
     when: << pipeline.parameters.buildId >>
     jobs:
       - build
