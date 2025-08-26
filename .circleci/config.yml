@@ -34,7 +34,6 @@ parameters:
 
 jobs:
   build:
-    # PERBAIKAN UTAMA: Menggunakan image varian "-node" yang sudah menyertakan Node.js
     docker:
       - image: cimg/android:2024.11.1-node
     
@@ -63,21 +62,20 @@ jobs:
               }' \
               "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
       
-      # Cache untuk Cordova CLI global
       - restore_cache:
           keys:
             - cordova-cli-v2
 
       - run:
           name: "Install Cordova CLI (if not cached)"
-          # PERBAIKAN: Tidak perlu lagi 'shell: --login' atau 'nvm'
-          command: npm install -g cordova
+          # PERBAIKAN: Menambahkan 'sudo' untuk mengatasi masalah perizinan EACCES
+          command: sudo npm install -g cordova
       
       - save_cache:
           key: cordova-cli-v2
           paths:
-            - /home/circleci/.npm-global
-      
+            - /usr/local/lib/node_modules # Path default untuk instalasi global dengan sudo
+
       - run:
           name: "Download and Unzip Project"
           command: |
@@ -98,7 +96,6 @@ jobs:
               printf "{ \"android\": { \"release\": { \"keystore\": \"release.jks\", \"storePassword\": \"<< pipeline.parameters.keystorePassword >>\", \"alias\": \"<< pipeline.parameters.keyAlias >>\", \"password\": \"<< pipeline.parameters.keyPassword >>\", \"packageType\": \"%s\" } } }" "$PACKAGE_TYPE" > build.json
             fi
 
-      # Cache untuk dependensi proyek (node_modules) dan Gradle
       - restore_cache:
           keys:
             - project-deps-v1-{{ checksum "cordova-project/package.json" }}
@@ -112,12 +109,13 @@ jobs:
             echo "--- Installing Project Dependencies ---"
             npm install
             echo "--- Adding Android Platform ---"
-            cordova platform add android
+            # Menjalankan sebagai 'circleci' user, bukan root
+            sudo --user=circleci --login cordova platform add android
             echo "--- Starting Cordova Build ---"
             if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
-              cordova build android --debug -- --gradleArg=--no-daemon
+              sudo --user=circleci --login cordova build android --debug -- --gradleArg=--no-daemon
             else
-              cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+              sudo --user=circleci --login cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
             fi
             echo "--- Cordova Build Finished ---"
 
@@ -125,9 +123,8 @@ jobs:
           key: project-deps-v1-{{ checksum "cordova-project/package.json" }}
           paths:
             - cordova-project/node_modules
-            - /home/circleci/.gradle # Simpan cache gradle bersamaan
+            - /home/circleci/.gradle
 
-      # Langkah upload success/fail tetap sama
       - run:
           name: "Upload Build File and Report Success"
           when: on_success
