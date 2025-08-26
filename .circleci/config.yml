@@ -36,7 +36,7 @@ jobs:
   build:
     docker:
       - image: cimg/android:2024.07.1
-    
+
     working_directory: ~/project
 
     environment:
@@ -62,14 +62,51 @@ jobs:
                 "status": "in_progress"
               }' \
               "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
-              
+
       - restore_cache:
           keys:
             - npm-global-v1
+
+      - run:
+          name: Install Node.js and npm
+          shell: /bin/bash --login -eo pipefail
+          command: |
+            # update package list
+            sudo apt-get update
+
+            # basic tools
+            sudo apt-get install -y curl ca-certificates gnupg
+
+            # install Node 20 (ubah jika butuh versi lain)
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+
+            # sanity checks
+            node -v || true
+            npm -v || true
+            which npm || true
+
+            # configure npm global prefix to user home to avoid permission issues
+            mkdir -p /home/circleci/.npm-global
+            npm config set prefix '/home/circleci/.npm-global'
+
+            # persist PATH for subsequent steps
+            echo 'export PATH=/home/circleci/.npm-global/bin:$PATH' >> $BASH_ENV
+            export PATH=/home/circleci/.npm-global/bin:$PATH
+
+            # show final settings
+            npm prefix -g || true
+            echo "PATH=$PATH"
+
       - run:
           name: Install Cordova CLI
           shell: /bin/bash --login -eo pipefail
-          command: npm install -g cordova
+          command: |
+            # ensure PATH is loaded for this shell (BASH_ENV will be used on new shells)
+            export PATH=/home/circleci/.npm-global/bin:$PATH
+            npm install -g cordova
+            cordova -v || true
+
       - save_cache:
           key: npm-global-v1
           paths:
@@ -102,14 +139,17 @@ jobs:
           shell: /bin/bash --login -eo pipefail
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
+            # ensure npm global bin is available
+            export PATH=/home/circleci/.npm-global/bin:$PATH
+
             cd cordova-project
-            
+
             echo "--- Installing Project Dependencies ---"
             npm install
-            
+
             echo "--- Adding Android Platform ---"
             cordova platform add android
-            
+
             echo "--- Starting Cordova Build ---"
             if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
               cordova build android --debug -- --gradleArg=--no-daemon
@@ -136,7 +176,7 @@ jobs:
             else
               ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
             fi
-            
+
             if [ -z "$ARTIFACT_PATH" ]; then echo "Build artifact not found!"; exit 1; fi
 
             UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" --fail -X POST \
@@ -145,7 +185,7 @@ jobs:
               -F "buildType=$BUILD_TYPE" \
               -H "X-Build-Secret: $WEBHOOK_SECRET" \
               "$APP_BASE_URL/upload-result/$USER_ID")
-            
+
             HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
             DOWNLOAD_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
 
@@ -171,13 +211,13 @@ jobs:
             if [ ! -f "$LOG_CONTENT" ]; then
                 echo "Build failed before generating a detailed log. Please check the CircleCI logs for errors." > $LOG_CONTENT
             fi
-            
+
             UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
               -F "logFile=@$LOG_CONTENT" \
               -F "buildId=$BUILD_ID" \
               -H "X-Build-Secret: $WEBHOOK_SECRET" \
               "$APP_BASE_URL/upload-log/$USER_ID")
-            
+
             HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
             LOG_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
 
