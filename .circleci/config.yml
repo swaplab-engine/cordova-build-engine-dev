@@ -68,7 +68,6 @@ jobs:
             - npm-global-v1
       - run:
           name: Install Cordova CLI
-          # PERBAIKAN: Aktifkan NVM sebelum menjalankan npm
           command: |
             source "$NVM_DIR/nvm.sh"
             npm install -g cordova
@@ -102,7 +101,6 @@ jobs:
           name: Install Dependencies and Build Project
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
-            # PERBAIKAN: Aktifkan NVM di langkah ini juga untuk keamanan
             source "$NVM_DIR/nvm.sh"
             cd cordova-project
             
