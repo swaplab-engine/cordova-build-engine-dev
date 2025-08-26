@@ -68,12 +68,14 @@ jobs:
             - npm-global-v1
       - run:
           name: Install Cordova CLI
-          # PERBAIKAN: Menghapus 'sudo' dari perintah
-          command: npm install -g cordova
+          # PERBAIKAN: Aktifkan NVM sebelum menjalankan npm
+          command: |
+            source "$NVM_DIR/nvm.sh"
+            npm install -g cordova
       - save_cache:
           key: npm-global-v1
           paths:
-            - /home/circleci/.npm-global # Path untuk global npm di image CircleCI
+            - /home/circleci/.npm-global
 
       - run:
           name: Download and Unzip Project
@@ -100,6 +102,8 @@ jobs:
           name: Install Dependencies and Build Project
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
+            # PERBAIKAN: Aktifkan NVM di langkah ini juga untuk keamanan
+            source "$NVM_DIR/nvm.sh"
             cd cordova-project
             
             echo "--- Installing Project Dependencies ---"
@@ -165,7 +169,6 @@ jobs:
           name: Upload Log File and Report Failure
           when: on_fail
           command: |
-            # Menggunakan log build yang sebenarnya jika ada
             LOG_CONTENT="build_log.txt"
             if [ ! -f "$LOG_CONTENT" ]; then
                 echo "Build failed before generating a detailed log. Please check the CircleCI logs for errors." > $LOG_CONTENT
