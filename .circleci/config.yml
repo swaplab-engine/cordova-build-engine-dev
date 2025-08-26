@@ -16,6 +16,9 @@ parameters:
   buildType:
     type: string
     default: "debug-apk"
+  ci_provider:
+    type: string
+    default: "circleci"
   keystoreUrl:
     type: string
     default: ""
@@ -44,6 +47,7 @@ jobs:
       BUILD_ID: << pipeline.parameters.buildId >>
       APP_BASE_URL: << pipeline.parameters.appBaseUrl >>
       BUILD_TYPE: << pipeline.parameters.buildType >>
+      CI_PROVIDER: << pipeline.parameters.ci_provider >>
 
     steps:
       - checkout
@@ -62,13 +66,14 @@ jobs:
               }' \
               "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
       
-      # Cache untuk Cordova CLI (sudah optimal)
       - restore_cache:
           keys:
             - cordova-cli-v2
+
       - run:
           name: "Install Cordova CLI (if not cached)"
           command: sudo npm install -g cordova
+      
       - save_cache:
           key: cordova-cli-v2
           paths:
@@ -94,17 +99,10 @@ jobs:
               printf "{ \"android\": { \"release\": { \"keystore\": \"release.jks\", \"storePassword\": \"<< pipeline.parameters.keystorePassword >>\", \"alias\": \"<< pipeline.parameters.keyAlias >>\", \"password\": \"<< pipeline.parameters.keyPassword >>\", \"packageType\": \"%s\" } } }" "$PACKAGE_TYPE" > build.json
             fi
 
-      # PERBAIKAN: Memisahkan dan mengoptimalkan cache untuk NPM dan Gradle
       - restore_cache:
-          name: Restore NPM Cache
           keys:
-            - npm-deps-v1-{{ checksum "cordova-project/package.json" }}
-            - npm-deps-v1-
-      - restore_cache:
-          name: Restore Gradle Cache
-          keys:
-            - gradle-deps-v1-{{ checksum "cordova-project/package.json" }}
-            - gradle-deps-v1-
+            - project-deps-v1-{{ checksum "cordova-project/package.json" }}
+            - project-deps-v1-
 
       - run:
           name: "Install Dependencies and Build Project"
@@ -126,17 +124,10 @@ jobs:
             fi
             echo "--- Cordova Build Finished ---"
 
-      # PERBAIKAN: Menyimpan cache NPM dan Gradle secara terpisah dan lebih lengkap
       - save_cache:
-          name: Save NPM Cache
-          key: npm-deps-v1-{{ checksum "cordova-project/package.json" }}
+          key: project-deps-v1-{{ checksum "cordova-project/package.json" }}
           paths:
             - cordova-project/node_modules
-            - /home/circleci/.npm
-      - save_cache:
-          name: Save Gradle Cache
-          key: gradle-deps-v1-{{ checksum "cordova-project/package.json" }}
-          paths:
             - /home/circleci/.gradle
 
       - run:
@@ -158,23 +149,23 @@ jobs:
             if [[ "$HTTP_CODE" != "200" ]]; then echo "Gagal upload. Kode: $HTTP_CODE"; exit 1; fi
             end_time=$(date +%s)
             duration=$((end_time - START_TIME))
-            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'", "status": "complete", "durationSeconds": "'"$duration"'", "downloadUrl": "'"$DOWNLOAD_URL"'"}' "$APP_BASE_URL/api/github-webhook"
+            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'", "status": "complete", "durationSeconds": "'"$duration"'", "downloadUrl": "'"$DOWNLOAD_URL"'", "ciProvider": "'"$CI_PROVIDER"'"}' "$APP_BASE_URL/api/github-webhook"
 
       - run:
           name: "Upload Log File and Report Failure"
           when: on_fail
           command: |
-            LOG_CONTENT="build_log.txt"
-            if [ ! -f "$LOG_CONTENT" ]; then
-                echo "Build failed. Check CircleCI logs for errors." > $LOG_CONTENT
+            LOG_FILE_TO_UPLOAD="build_log.txt"
+            if [ ! -f "$LOG_FILE_TO_UPLOAD" ]; then
+                echo "Build failed before generating a detailed log. Check CircleCI logs for errors." > $LOG_FILE_TO_UPLOAD
             fi
-            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -F "logFile=@$LOG_CONTENT" -F "buildId=$BUILD_ID" -H "X-Build-Secret: $WEBHOOK_SECRET" "$APP_BASE_URL/upload-log/$USER_ID")
+            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -F "logFile=@$LOG_FILE_TO_UPLOAD" -F "buildId=$BUILD_ID" -F "ci_provider=$CI_PROVIDER" -H "X-Build-Secret: $WEBHOOK_SECRET" "$APP_BASE_URL/upload-log/$USER_ID")
             HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
-            LOG_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
-            if [[ "$HTTP_CODE" != "200" ]]; then LOG_URL=""; fi
+            LOG_FILENAME=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+            if [[ "$HTTP_CODE" != "200" ]]; then LOG_FILENAME=""; fi
             end_time=$(date +%s)
             duration=$((end_time - START_TIME))
-            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'", "status": "failed", "durationSeconds": "'"$duration"'", "logUrl": "'"$LOG_URL"'"}' "$APP_BASE_URL/api/github-webhook"
+            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'", "status": "failed", "durationSeconds": "'"$duration"'", "logFile": "'"$LOG_FILENAME"'", "ciProvider": "'"$CI_PROVIDER"'"}' "$APP_BASE_URL/api/github-webhook"
 
 workflows:
   build_cordova_app:
