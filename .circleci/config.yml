@@ -4,16 +4,16 @@ version: 2.1
 parameters:
   userId:
     type: string
-    default: "" # TAMBAHKAN INI
+    default: ""
   buildId:
     type: string
-    default: "" # TAMBAHKAN INI
+    default: ""
   projectUrl:
     type: string
-    default: "" # TAMBAHKAN INI
+    default: ""
   appBaseUrl:
     type: string
-    default: "" # TAMBAHKAN INI
+    default: ""
   buildType:
     type: string
     default: "debug-apk"
@@ -35,27 +35,22 @@ parameters:
 
 jobs:
   build:
-    # Menggunakan Docker image yang sudah memiliki Node.js v20 dan tools dasar
     docker:
       - image: cimg/node:20.11.1
     
-    # Menetapkan working directory di dalam container
     working_directory: ~/project
 
     environment:
-      # Variabel lingkungan untuk diakses di semua langkah
       USER_ID: << pipeline.parameters.userId >>
       BUILD_ID: << pipeline.parameters.buildId >>
       APP_BASE_URL: << pipeline.parameters.appBaseUrl >>
       BUILD_TYPE: << pipeline.parameters.buildType >>
 
     steps:
-      # Langkah 1: Mencatat waktu mulai
       - run:
           name: Record start time
           command: echo 'export START_TIME=$(date +%s)' >> $BASH_ENV
 
-      # Langkah 2: Melaporkan status "in_progress"
       - run:
           name: Report Build In Progress
           command: |
@@ -69,14 +64,12 @@ jobs:
               }' \
               "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
               
-      # Langkah 3: Install Java (JDK 17)
       - run:
           name: Set up JDK 17
           command: |
             sudo apt-get update
             sudo apt-get install -y openjdk-17-jdk
             
-      # Langkah 4: Cache & Install Cordova CLI
       - restore_cache:
           keys:
             - npm-global-v1
@@ -88,7 +81,6 @@ jobs:
           paths:
             - /usr/local/lib/node_modules
 
-      # Langkah 5: Unduh dan Unzip Proyek
       - run:
           name: Download and Unzip Project
           command: |
@@ -96,7 +88,6 @@ jobs:
             mkdir cordova-project
             unzip cordovaProject.zip -d cordova-project
 
-      # Langkah 6: Siapkan Konfigurasi Signing (Release)
       - run:
           name: Prepare Signing Configuration
           when: on_success
@@ -109,21 +100,19 @@ jobs:
               if [[ "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
                 PACKAGE_TYPE="bundle"
               fi
-              cat > build.json << EOF
+              # PERBAIKAN: Tambahkan '\' sebelum '<<' untuk escape
+              cat > build.json \<< EOF
               { "android": { "release": { "keystore": "release.jks", "storePassword": "<< pipeline.parameters.keystorePassword >>", "alias": "<< pipeline.parameters.keyAlias >>", "password": "<< pipeline.parameters.keyPassword >>", "packageType": "$PACKAGE_TYPE" } } }
               EOF
             fi
 
-      # Langkah 7: Cache Gradle
       - restore_cache:
           keys:
             - gradle-cache-{{ checksum "cordova-project/platforms/android/build.gradle" }}
             - gradle-cache-
       
-      # Langkah 8: Install Dependensi & Build Project
       - run:
           name: Install Dependencies and Build Project
-          # PERBAIKAN: Timeout dipindahkan ke sini
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
             cd cordova-project
@@ -141,7 +130,6 @@ jobs:
               echo "--- Cordova Build Finished ---"
             } > ../build_log.txt 2>&1
 
-      # Langkah 9 (Sukses): Unggah hasil build
       - run:
           name: Upload Build File and Report Success
           when: on_success
@@ -181,7 +169,6 @@ jobs:
               }' \
               "$APP_BASE_URL/api/github-webhook"
 
-      # Langkah 10 (Gagal): Unggah log error
       - run:
           name: Upload Log File and Report Failure
           when: on_fail
@@ -213,13 +200,11 @@ jobs:
               }' \
               "$APP_BASE_URL/api/github-webhook"
       
-      # Menyimpan cache Gradle setelah build selesai
       - save_cache:
           key: gradle-cache-{{ checksum "cordova-project/platforms/android/build.gradle" }}
           paths:
             - ~/.gradle
 
-# Mendefinisikan alur kerja
 workflows:
   build_cordova_app:
     jobs:
