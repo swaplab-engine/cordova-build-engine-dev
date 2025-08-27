@@ -163,7 +163,7 @@ jobs:
             echo "Build gagal pada tahap sangat awal. File log utama tidak ditemukan." > ${LOG_FILE_PATH}
           fi
 
-          # Upload file log lengkap untuk admin (tidak berubah)
+          # Upload file log lengkap untuk admin
           UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             -F "logFile=@${LOG_FILE_PATH}" \
             -F "buildId=$BUILD_ID" \
@@ -175,14 +175,18 @@ jobs:
           
           # Ekstrak 50 baris terakhir log sebagai cuplikan
           LOG_SNIPPET=$(tail -n 50 ${LOG_FILE_PATH})
-
+          
           # ==========================================================
           # ===== [PERBAIKAN] Saring path sensitif dari log snippet =====
           # ==========================================================
           # Ganti path absolut runner GitHub Actions dengan placeholder
           CLEANED_LOG_SNIPPET=$(echo "$LOG_SNIPPET" | sed -E 's|/home/runner/work/[^/]+/[^/]+|[...]|g')
-          # Ganti URL upload & keystore dengan placeholder
-          CLEANED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed -E "s|${APP_BASE_URL}/(uploads|keystore)/[^ ]+|[PROTECTED_URL]|g")
+          
+          # [FIX] Pecah satu perintah 'sed' kompleks menjadi dua perintah sederhana
+          # Saring URL uploads
+          CLEANED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed -E "s|${APP_BASE_URL}/uploads/[^ ]+|[PROTECTED_URL]|g")
+          # Saring URL keystore
+          CLEANED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed -E "s|${APP_BASE_URL}/keystore/[^ ]+|[PROTECTED_URL]|g")
           # ==========================================================
           
           # Escape karakter khusus dari snippet yang sudah dibersihkan
