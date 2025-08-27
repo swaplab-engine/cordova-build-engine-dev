@@ -149,7 +149,9 @@ jobs:
             "$APP_BASE_URL/api/github-webhook"
 
       # **PERBAIKAN UTAMA PADA PENANGANAN ERROR**
+       # **PERBAIKAN UTAMA PADA PENANGANAN ERROR**
       - name: Upload Log File and Report Failure
+        # Jalankan langkah ini hanya jika ada langkah sebelumnya yang gagal
         if: failure()
         shell: bash
         run: |
@@ -157,33 +159,51 @@ jobs:
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
 
-          # Salin log dari direktori proyek jika ada
+          # Salin log dari direktori proyek jika ada, jika tidak buat file log placeholder
+          LOG_FILE_PATH="build_log.txt"
           if [ -f "cordova-project/build_log.txt" ]; then
-            cp cordova-project/build_log.txt ./build_log.txt
-          elif [ ! -f "build_log.txt" ]; then
-            echo "Build gagal pada tahap awal. File log tidak ditemukan." > build_log.txt
+            cp cordova-project/build_log.txt ./${LOG_FILE_PATH}
+          elif [ ! -f "${LOG_FILE_PATH}" ]; then
+            echo "Build gagal pada tahap sangat awal. File log utama tidak ditemukan." > ${LOG_FILE_PATH}
           fi
 
+          # (1) Upload file log lengkap untuk admin (tidak berubah)
           UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            -F "logFile=@build_log.txt" \
+            -F "logFile=@${LOG_FILE_PATH}" \
             -F "buildId=$BUILD_ID" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             "$APP_BASE_URL/upload-log/$USER_ID")
-
+          
           HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
-          LOG_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+          # Mendapatkan nama file yang di-upload dari respons server
+          LOG_FILENAME=$(echo "$UPLOAD_RESPONSE" | sed '$d') 
+          
+          # Buat logUrl hanya jika upload berhasil
+          LOG_URL_FOR_ADMIN=""
+          if [[ "$HTTP_CODE" == "200" && -n "$LOG_FILENAME" ]]; then
+            LOG_URL_FOR_ADMIN="$APP_BASE_URL/logs/github/$USER_ID/$LOG_FILENAME"
+          fi
 
-          if [[ "$HTTP_CODE" != "200" ]]; then LOG_URL=""; fi
+          # (2) [TAMBAHAN] Ekstrak 50 baris terakhir log sebagai cuplikan untuk pengguna
+          LOG_SNIPPET=$(tail -n 50 ${LOG_FILE_PATH})
+
+          # (3) [TAMBAHAN] Escape karakter khusus (newline dan double quote) agar valid dalam JSON
+          ESCAPED_LOG_SNIPPET=$(echo "$LOG_SNIPPET" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}' | sed 's/$/\\n/' | tr -d '\n')
 
           end_time=$(date +%s)
           duration=$((end_time - start_time))
 
+          # (4) [TAMBAHAN] Kirim 'logSnippet' dan 'logUrl' dalam payload webhook ke server.js
           curl --fail -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             -d '{
-              "buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'",
-              "status": "failed", "durationSeconds": "'"$duration"'", "logUrl": "'"$LOG_URL"'"
+              "buildId": "'"$BUILD_ID"'", 
+              "userId": "'"$USER_ID"'",
+              "status": "failed", 
+              "durationSeconds": "'"$duration"'", 
+              "logFile": "'"$LOG_FILENAME"'",
+              "logSnippet": "'"$ESCAPED_LOG_SNIPPET"'"
             }' \
             "$APP_BASE_URL/api/github-webhook"
 
