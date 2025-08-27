@@ -148,42 +148,101 @@ jobs:
             }' \
             "$APP_BASE_URL/api/github-webhook"
 
+      
+       - name: Install Dependencies and Build Project
+        id: cordova_build_step
+        shell: bash
+        # Tambahkan continue-on-error agar langkah 'Report Failure' di bawahnya PASTI berjalan
+        # dan bisa menangkap log. Status kegagalan job tetap akan dilaporkan.
+        continue-on-error: true 
+        run: |
+          # Buat file log kosong di awal untuk memastikan file selalu ada
+          touch ../build_log.txt
+          cd cordova-project
+          {
+            echo "--- Installing Project Dependencies ---"
+            npm install
+            echo "--- Adding Android Platform ---"
+            cordova platform add android
+            echo "--- Starting Cordova Build ---"
+            if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
+              cordova build android --debug -- --gradleArg=--no-daemon
+            else
+              cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+            fi
+            echo "--- Cordova Build Finished ---"
+          } > ../build_log.txt 2>&1
+
+      # Langkah ini ditambahkan untuk memeriksa hasil dari langkah build secara eksplisit
+      - name: Final Check on Build Status
+        id: final_check
+        if: always() # Selalu jalankan langkah ini
+        shell: bash
+        run: |
+          if [[ ${{ steps.cordova_build_step.outcome }} == 'success' ]]; then
+            echo "Build step succeeded."
+            echo "outcome=success" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Build step failed. See the log for details."
+            echo "outcome=failure" >> $GITHUB_OUTPUT
+            # Perintah exit 1 ini akan membuat seluruh job dianggap gagal.
+            exit 1
+          fi
+
+      - name: Upload Build File and Report Success
+        # Jalankan HANYA jika langkah final_check berhasil
+        if: steps.final_check.outputs.outcome == 'success'
+        shell: bash
+        run: |
+          # ... (isi langkah ini tidak berubah) ...
+
       # **PERBAIKAN UTAMA PADA PENANGANAN ERROR**
       - name: Upload Log File and Report Failure
-        # Jalankan langkah ini jika seluruh job gagal
-        if: failure()
+        # Jalankan HANYA jika langkah final_check GAGAL
+        if: failure() && steps.final_check.outputs.outcome == 'failure'
         shell: bash
         run: |
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
 
-          # Salin log dari direktori proyek jika ada
-          if [ -f "cordova-project/build_log.txt" ]; then
-             cp cordova-project/build_log.txt ./build_log.txt
-          elif [ ! -f "build_log.txt" ]; then
-             echo "Build gagal pada tahap awal. File log tidak ditemukan." > build_log.txt
+          # Cek file log di lokasi yang benar (root workspace)
+          if [ ! -f "build_log.txt" ]; then
+            echo "Build failed very early. Log file was not generated." > build_log.txt
           fi
 
-          UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+          # Upload file log lengkap untuk admin (tidak berubah)
+          echo "--- Uploading full log file for admin ---"
+          LOG_FILENAME=$(curl -s --fail -X POST \
             -F "logFile=@build_log.txt" \
             -F "buildId=$BUILD_ID" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             "$APP_BASE_URL/upload-log/$USER_ID")
           
-          HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
-          LOG_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
-
-          if [[ "$HTTP_CODE" != "200" ]]; then LOG_URL=""; fi
+          if [ -z "$LOG_FILENAME" ]; then
+            echo "::error::Failed to upload log file."
+            # Tetap lanjutkan untuk melaporkan kegagalan meskipun upload log gagal
+            LOG_FILENAME=""
+          fi
 
           end_time=$(date +%s)
           duration=$((end_time - start_time))
 
+          # Ambil 50 baris terakhir dari log sebagai cuplikan untuk pengguna
+          LOG_SNIPPET=$(tail -n 50 build_log.txt | jq -s -R .)
+
+          # Kirim laporan kegagalan ke server.js
+          echo "--- Reporting failure to webhook ---"
           curl --fail -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             -d '{
-              "buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'",
-              "status": "failed", "durationSeconds": "'"$duration"'", "logUrl": "'"$LOG_URL"'"
+              "buildId": "'"$BUILD_ID"'",
+              "userId": "'"$USER_ID"'",
+              "status": "failed",
+              "durationSeconds": "'"$duration"'",
+              "logFile": "'"$LOG_FILENAME"'",
+              "logSnippet": '"$LOG_SNIPPET"',
+              "ciProvider": "github"
             }' \
             "$APP_BASE_URL/api/github-webhook"
