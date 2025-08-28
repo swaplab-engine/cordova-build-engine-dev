@@ -33,7 +33,7 @@ parameters:
     default: ""
   timeoutMinutes:
     type: integer
-    default: 8
+    default: 12 # Disesuaikan untuk Capacitor
 
 jobs:
   build:
@@ -46,8 +46,13 @@ jobs:
       USER_ID: << pipeline.parameters.userId >>
       BUILD_ID: << pipeline.parameters.buildId >>
       APP_BASE_URL: << pipeline.parameters.appBaseUrl >>
-      BUILD_TYPE: << pipeline.parameters.buildType >>
+      BUILD_TYPE_RAW: << pipeline.parameters.buildType >>
       CI_PROVIDER: << pipeline.parameters.ci_provider >>
+      # Menambahkan variabel lain untuk kemudahan
+      KEYSTORE_URL: << pipeline.parameters.keystoreUrl >>
+      KEYSTORE_PASSWORD: << pipeline.parameters.keystorePassword >>
+      KEY_ALIAS: << pipeline.parameters.keyAlias >>
+      KEY_PASSWORD: << pipeline.parameters.keyPassword >>
 
     steps:
       - checkout
@@ -65,135 +70,139 @@ jobs:
                 "status": "in_progress"
               }' \
               "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
-      
-      - restore_cache:
-          keys:
-            - cordova-cli-v2
-
-      - run:
-          name: "Install Cordova CLI (if not cached)"
-          command: sudo npm install -g cordova
-      
-      - save_cache:
-          key: cordova-cli-v2
-          paths:
-            - /usr/local/lib/node_modules
 
       - run:
           name: "Download and Unzip Project"
           command: |
-            curl -L -o cordovaProject.zip "<< pipeline.parameters.projectUrl >>"
-            mkdir -p cordova-project
-            unzip -o cordovaProject.zip -d cordova-project
-
-      - run:
-          name: "Prepare Signing Configuration"
-          command: |
-            if [[ "<< pipeline.parameters.buildType >>" == "release-apk" || "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
-              cd cordova-project
-              curl -L -o release.jks "<< pipeline.parameters.keystoreUrl >>"
-              PACKAGE_TYPE="apk"
-              if [[ "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
-                PACKAGE_TYPE="bundle"
-              fi
-              printf "{ \"android\": { \"release\": { \"keystore\": \"release.jks\", \"storePassword\": \"<< pipeline.parameters.keystorePassword >>\", \"alias\": \"<< pipeline.parameters.keyAlias >>\", \"password\": \"<< pipeline.parameters.keyPassword >>\", \"packageType\": \"%s\" } } }" "$PACKAGE_TYPE" > build.json
-            fi
+            curl -L -o project.zip "<< pipeline.parameters.projectUrl >>"
+            mkdir -p app
+            unzip -o project.zip -d app
 
       - restore_cache:
           keys:
-            - project-deps-v1-{{ checksum "cordova-project/package.json" }}
-            - project-deps-v1-
+            - v1-capacitor-deps-{{ checksum "app/package-lock.json" }}
+            - v1-capacitor-deps-
 
       - run:
-          name: "Install Dependencies and Build Project"
-          no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
-          # ===== [PERBAIKAN 1] Menangkap semua output ke file build_log.txt =====
+          name: "Prepare Keystore (Release Only)"
+          working_directory: app
           command: |
-            touch build_log.txt
-            {
-              cd cordova-project
-              echo "--- Installing Project Dependencies ---"
-              npm install
-              echo "--- Adding Android Platform ---"
-              cordova platform add android
-              echo "--- Installing Android Build Tools 35.0.0 ---"
-              yes | sdkmanager --licenses > /dev/null || true
-              sdkmanager "build-tools;35.0.0"
-              echo "--- Starting Cordova Build ---"
-              if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
-                cordova build android --debug -- --gradleArg=--no-daemon
-              else
-                cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+            if [[ "$BUILD_TYPE_RAW" == "release-apk" || "$BUILD_TYPE_RAW" == "release-aab" ]]; then
+              if [ -z "$KEYSTORE_URL" ]; then
+                echo "keystoreUrl is required for release builds"
+                exit 1
               fi
-              echo "--- Cordova Build Finished ---"
-            } >> build_log.txt 2>&1
+              mkdir -p android/app
+              curl -L -o android/app/release.jks "$KEYSTORE_URL"
+            fi
+            
+      - run:
+          name: "Install, Sync, and Build Project"
+          working_directory: app
+          no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
+          command: |
+            {
+              echo "--- Installing Project Dependencies ---"
+              if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
+              echo "--- Building Web Assets & Ensuring Capacitor ---"
+              npm run build --if-present
+              if ! node -e "require('fs').existsSync('node_modules/@capacitor/cli')" 2>/dev/null; then
+                npm install --no-audit --no-fund --save-dev @capacitor/cli @capacitor/core @capacitor/android
+              fi
+              
+              echo "--- Adding / Syncing Android Platform ---"
+              # Logika krusial untuk mengatasi masalah cache
+              if [ ! -f "android/gradlew" ]; then
+                echo "Android project is incomplete. Forcing removal and re-adding..."
+                rm -rf android
+                npx cap add android
+              fi
+              npx cap sync android
+
+              echo "--- Starting Gradle Build ---"
+              cd android
+              chmod +x ./gradlew
+
+              BUILD_TYPE=$(echo "$BUILD_TYPE_RAW" | tr '[:upper:]' '[:lower:]')
+
+              if [[ "$BUILD_TYPE" == debug* ]]; then
+                ./gradlew assembleDebug --no-daemon
+              else
+                STORE_PATH="$(pwd)/app/release.jks"
+                if [[ "$BUILD_TYPE" == *aab* || "$BUILD_TYPE" == *bundle* ]]; then
+                    TASK="bundleRelease"
+                else
+                    TASK="assembleRelease"
+                fi
+                
+                ./gradlew $TASK --no-daemon \
+                  -Pandroid.injected.signing.store.file="$STORE_PATH" \
+                  -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+                  -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+                  -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+              fi
+              echo "--- Build Finished ---"
+            } > ../build_log.txt 2>&1
+      
       - save_cache:
-          key: project-deps-v1-{{ checksum "cordova-project/package.json" }}
+          key: v1-capacitor-deps-{{ checksum "app/package-lock.json" }}
           paths:
-            - cordova-project/node_modules
+            - app/node_modules
             - /home/circleci/.gradle
 
       - run:
           name: "Upload Build File and Report Success"
           when: on_success
           command: |
+            BUILD_TYPE=$(echo "$BUILD_TYPE_RAW" | tr '[:upper:]' '[:lower:]')
             ARTIFACT_PATH=""
-            if [[ "$BUILD_TYPE" == "release-aab" ]]; then
-              ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
-            elif [[ "$BUILD_TYPE" == "release-apk" ]]; then
-              ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+
+            if [[ "$BUILD_TYPE" == *aab* || "$BUILD_TYPE" == *bundle* ]]; then
+              ARTIFACT_PATH=$(find app/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+            elif [[ "$BUILD_TYPE" == debug* ]]; then
+              ARTIFACT_PATH=$(find app/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
             else
-              ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+              ARTIFACT_PATH=$(find app/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
             fi
+
             if [ -z "$ARTIFACT_PATH" ]; then echo "Build artifact not found!"; exit 1; fi
-            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" --fail -X POST -F "buildFile=@$ARTIFACT_PATH" -F "buildId=$BUILD_ID" -F "buildType=$BUILD_TYPE" -H "X-Build-Secret: $WEBHOOK_SECRET" "$APP_BASE_URL/upload-result/$USER_ID")
+            
+            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" --fail -X POST -F "buildFile=@$ARTIFACT_PATH" -F "buildId=$BUILD_ID" -F "buildType=$BUILD_TYPE_RAW" -H "X-Build-Secret: $WEBHOOK_SECRET" "$APP_BASE_URL/upload-result/$USER_ID")
             HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
             DOWNLOAD_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+            
             if [[ "$HTTP_CODE" != "200" ]]; then echo "Gagal upload. Kode: $HTTP_CODE"; exit 1; fi
+            
             end_time=$(date +%s)
             duration=$((end_time - START_TIME))
+            
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'", "status": "complete", "durationSeconds": "'"$duration"'", "downloadUrl": "'"$DOWNLOAD_URL"'", "ciProvider": "'"$CI_PROVIDER"'"}' "$APP_BASE_URL/api/github-webhook"
 
       - run:
           name: "Upload Log File and Report Failure"
           when: on_fail
-          # ===== [PERBAIKAN 2] Mengganti total command on_fail =====
           command: |
             LOG_FILE_PATH="build_log.txt"
             if [ ! -f "$LOG_FILE_PATH" ]; then
                 echo "Build gagal pada tahap sangat awal. File log utama tidak ditemukan." > $LOG_FILE_PATH
             fi
             
-            # 1. Upload file log lengkap untuk admin
-            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-              -F "logFile=@$LOG_FILE_PATH" \
-              -F "buildId=$BUILD_ID" \
-              -F "ci_provider=$CI_PROVIDER" \
-              -H "X-Build-Secret: $WEBHOOK_SECRET" \
-              "$APP_BASE_URL/upload-log/$USER_ID")
-            
+            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -F "logFile=@$LOG_FILE_PATH" -F "buildId=$BUILD_ID" -F "ci_provider=$CI_PROVIDER" -H "X-Build-Secret: $WEBHOOK_SECRET" "$APP_BASE_URL/upload-log/$USER_ID")
             HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
             LOG_FILENAME=$(echo "$UPLOAD_RESPONSE" | sed '$d')
             
-            # 2. Ekstrak 50 baris terakhir log sebagai cuplikan
             LOG_SNIPPET=$(tail -n 50 ${LOG_FILE_PATH})
             
-            # 3. Saring path sensitif dari log snippet
-            # Ganti path absolut runner CircleCI dengan placeholder
             CLEANED_LOG_SNIPPET=$(echo "$LOG_SNIPPET" | sed -E 's|/home/circleci/project[^ ]*|[...]|g')
-            # Saring URL uploads
             CLEANED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed -E "s|${APP_BASE_URL}/uploads/[^ ]+|[PROTECTED_URL]|g")
-            # Saring URL keystore
             CLEANED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed -E "s|${APP_BASE_URL}/keystore/[^ ]+|[PROTECTED_URL]|g")
             
-            # 4. Escape karakter khusus dari snippet yang sudah dibersihkan
             ESCAPED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}' | sed 's/$/\\n/' | tr -d '\n')
 
             end_time=$(date +%s)
             duration=$((end_time - START_TIME))
             
-            # 5. Kirim payload lengkap (termasuk logSnippet) ke server
             curl --fail -X POST \
               -H "Content-Type: application/json" \
               -H "X-Build-Secret: $WEBHOOK_SECRET" \
@@ -209,7 +218,7 @@ jobs:
               "$APP_BASE_URL/api/github-webhook"
 
 workflows:
-  build_cordova_app:
+  build_capacitor_app:
     when: << pipeline.parameters.buildId >>
     jobs:
       - build
