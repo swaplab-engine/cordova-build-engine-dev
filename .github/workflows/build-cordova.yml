@@ -15,7 +15,6 @@ jobs:
       outcome: ${{ steps.final_check.outputs.outcome }}
 
     steps:
-      # ... (semua langkah dari awal sampai build project tetap sama) ...
       - name: Record start time
         shell: bash
         run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
@@ -90,20 +89,23 @@ jobs:
         id: cordova_build_step
         shell: bash
         run: |
+          # Redirect semua output (stdout dan stderr) ke file log untuk debugging yang lebih baik
+          exec &> ../build_log.txt
+          
+          set -e # Hentikan skrip jika ada error
+          
           cd cordova-project
-          {
-            echo "--- Installing Project Dependencies ---"
-            npm install
-            echo "--- Adding Android Platform ---"
-            cordova platform add android
-            echo "--- Starting Cordova Build ---"
-            if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
-              cordova build android --debug -- --gradleArg=--no-daemon
-            else
-              cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
-            fi
-            echo "--- Cordova Build Finished ---"
-          } > ../build_log.txt 2>&1
+          echo "--- Installing Project Dependencies ---"
+          npm install
+          echo "--- Adding Android Platform ---"
+          cordova platform add android
+          echo "--- Starting Cordova Build ---"
+          if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
+            cordova build android --debug -- --gradleArg=--no-daemon
+          else
+            cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+          fi
+          echo "--- Cordova Build Finished ---"
 
       - name: Setup SSH for SCP
         if: success()
@@ -115,43 +117,32 @@ jobs:
         if: success()
         shell: bash
         run: |
-          # --- Bagian 1: Temukan file dan buat nama file baru (tidak berubah) ---
-          BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
-
-          ARTIFACT_PATH=""
-          if [[ "$BUILD_TYPE" == "release-aab" ]]; then
-            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
-          elif [[ "$BUILD_TYPE" == "release-apk" ]]; then
-            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          else
-            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-          fi
+          BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           
+          # Temukan path file hasil build .aab atau .apk
+          ARTIFACT_PATH=$(find cordova-project/platforms/android/app -name "*.aab" -o -name "*.apk" | head -n 1)
           if [ -z "$ARTIFACT_PATH" ]; then echo "::error::Build artifact not found!"; exit 1; fi
           
+          # Buat nama file unik dan terstruktur
           if [[ "$BUILD_TYPE" == "debug-apk" ]]; then PREFIX="debug"; else PREFIX="release"; fi
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then EXTENSION="aab"; else EXTENSION="apk"; fi
           NEW_FILENAME="${PREFIX}_${BUILD_ID}.${EXTENSION}"
 
-          # ===================================================================
-          # [LOGIKA BARU] Pastikan direktori user ada di server sebelum upload
-          # ===================================================================
-          echo "Ensuring user directory exists on server..."
+          # Pastikan direktori user ada di server sebelum upload
           ssh -o StrictHostKeyChecking=no emi@84.46.248.72 "mkdir -p /home/emi/swaplab-project/apps/cordova-app/public/builds/$USER_ID"
-
-          # --- Bagian 2: Unggah file menggunakan SCP (tidak berubah) ---
-          echo "Uploading to server as $NEW_FILENAME..."
+          
+          # Unggah file menggunakan SCP dengan nama file baru
           scp -o StrictHostKeyChecking=no "$ARTIFACT_PATH" emi@84.46.248.72:/home/emi/swaplab-project/apps/cordova-app/public/builds/$USER_ID/$NEW_FILENAME
-          echo "Upload complete."
 
-          # --- Bagian 3: Laporkan status sukses ke server (tidak berubah) ---
+          # Buat URL download final menggunakan URL PUBLIK
           DOWNLOAD_URL="${{ github.event.client_payload.publicBaseUrl }}/builds/$USER_ID/$NEW_FILENAME"
           
           end_time=$(date +%s)
           duration=$((end_time - start_time))
           
+          # Laporkan status kembali ke server menggunakan URL INTERNAL
           curl --fail -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
@@ -165,38 +156,37 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          # ... (Langkah ini tidak berubah, sudah menggunakan URL internal) ...
-          USER_ID="${{ github.event.client_payload.userId }}"
+          # Ambil URL internal langsung dari payload untuk konsistensi
           INTERNAL_API_URL="${{ github.event.client_payload.internalApiUrl }}"
-          BUILD_ID="${{ github.event.client_payload.buildId }}"
-
-          LOG_FILE_PATH="build_log.txt"
-          if [ ! -f "build_log.txt" ]; then
-             echo "Build log not found at root. Checking in project dir..."
-             if [ -f "cordova-project/build_log.txt" ]; then
-                cp cordova-project/build_log.txt ./${LOG_FILE_PATH}
-             elif [ ! -f "${LOG_FILE_PATH}" ]; then
-                echo "Build failed very early. Main log file not found." > ${LOG_FILE_PATH}
-             fi
+          if [ -z "$INTERNAL_API_URL" ]; then
+             echo "::error::Fatal: internalApiUrl not received in payload. Cannot report failure."
+             exit 1
           fi
 
+          USER_ID="${{ github.event.client_payload.userId }}"
+          BUILD_ID="${{ github.event.client_payload.buildId }}"
+          
+          LOG_FILE_PATH="build_log.txt"
+          if [ ! -f "${LOG_FILE_PATH}" ]; then
+            echo "Build failed very early. Main log file not found." > ${LOG_FILE_PATH}
+          fi
+
+          # Upload log (multipart/form-data)
           UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             -F "logFile=@${LOG_FILE_PATH}" \
             -F "buildId=$BUILD_ID" \
-            -H "X-Build-secret: ${{ secrets.WEBHOOK_SECRET }}" \
+            -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             "$INTERNAL_API_URL/upload-log/$USER_ID")
-
-          LOG_FILENAME=$(echo "$UPLOAD_RESPONSE" | sed '$d')
-
-          LOG_SNIPPET=$(tail -n 50 ${LOG_FILE_PATH})
           
-          CLEANED_LOG_SNIPPET=$(echo "$LOG_SNIPPET" | sed -E 's|/home/runner/work/[^/]+/[^/]+|[...]|g' | sed -E "s|${{ github.event.client_payload.publicBaseUrl }}/[^ ]+|[PROTECTED_URL]|g")
-
-          ESCAPED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}' | sed 's/$/\\n/' | tr -d '\n')
+          LOG_FILENAME=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+          LOG_SNIPPET=$(tail -n 50 ${LOG_FILE_PATH})
+          CLEANED_LOG_SNIPPET=$(echo "$LOG_SNIPPET" | sed -E 's|/home/runner/work/[^/]+/[^/]+|[...]|g')
+          ESCAPED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | awk "{printf \"%s\\\\n\", \$0}" | sed 's/$/\\n/' | tr -d '\n')
           
           end_time=$(date +%s)
           duration=$((end_time - start_time))
 
+          # Laporan status gagal (application/json)
           curl --fail -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
@@ -208,7 +198,7 @@ jobs:
               "logFile": "'"$LOG_FILENAME"'",
               "logSnippet": "'"$ESCAPED_LOG_SNIPPET"'"
             }' \
-            "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
+            "$INTERNAL_API_URL/api/github-webhook"
 
       - name: Final check
         id: final_check
