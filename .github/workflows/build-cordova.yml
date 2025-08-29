@@ -31,7 +31,7 @@ jobs:
               "status": "in_progress"
             }' \
             "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
-
+            
       - name: Set up Node.js v20
         uses: actions/setup-node@v4
         with:
@@ -42,12 +42,6 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-
-      - name: Cache global npm packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-global-v3
 
       - name: Install Cordova CLI
         shell: bash
@@ -61,37 +55,12 @@ jobs:
           mkdir cordova-project
           unzip cordovaProject.zip -d cordova-project
 
-      - name: Prepare Signing Configuration
-        if: ${{ startsWith(github.event.client_payload.buildType, 'release') }}
-        shell: bash
-        run: |
-          cd cordova-project
-          KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
-          curl -L -o release.jks "$KEYSTORE_URL"
-          PACKAGE_TYPE="apk"
-          if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
-            PACKAGE_TYPE="bundle"
-          fi
-          cat > build.json << EOF
-          { "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } } }
-          EOF
-
-      - name: Cache Gradle packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/gradle*') }}
-          restore-keys: ${{ runner.os }}-gradle-
-
       - name: Install Dependencies and Build Project
         id: cordova_build_step
         shell: bash
         run: |
-          # Redirect semua output (stdout dan stderr) ke file log untuk debugging yang lebih baik
+          # Redirect semua output ke file log
           exec &> ../build_log.txt
-          
           set -e # Hentikan skrip jika ada error
           
           cd cordova-project
@@ -100,10 +69,29 @@ jobs:
           echo "--- Adding Android Platform ---"
           cordova platform add android
           echo "--- Starting Cordova Build ---"
+
+          # Logika build dipisahkan untuk debug dan release
           if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
+            # Build Debug (tanpa signing)
             cordova build android --debug -- --gradleArg=--no-daemon
           else
-            cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+            # Build Release (dengan signing dari payload)
+            echo "--- Downloading Keystore for Release Build ---"
+            KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
+            curl -L -o release.jks "$KEYSTORE_URL"
+            
+            PACKAGE_TYPE_FLAG=""
+            if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
+              PACKAGE_TYPE_FLAG="--packageType=bundle"
+            fi
+
+            echo "--- Starting Release Build ---"
+            cordova build android --release -- --gradleArg=--no-daemon \
+              --keystore="release.jks" \
+              --alias="${{ github.event.client_payload.keyAlias }}" \
+              --storePassword="${{ github.event.client_payload.keystorePassword }}" \
+              --password="${{ github.event.client_payload.keyPassword }}" \
+              $PACKAGE_TYPE_FLAG
           fi
           echo "--- Cordova Build Finished ---"
 
@@ -121,28 +109,21 @@ jobs:
           BUILD_ID="${{ github.event.client_payload.buildId }}"
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           
-          # Temukan path file hasil build .aab atau .apk
           ARTIFACT_PATH=$(find cordova-project/platforms/android/app -name "*.aab" -o -name "*.apk" | head -n 1)
           if [ -z "$ARTIFACT_PATH" ]; then echo "::error::Build artifact not found!"; exit 1; fi
           
-          # Buat nama file unik dan terstruktur
           if [[ "$BUILD_TYPE" == "debug-apk" ]]; then PREFIX="debug"; else PREFIX="release"; fi
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then EXTENSION="aab"; else EXTENSION="apk"; fi
           NEW_FILENAME="${PREFIX}_${BUILD_ID}.${EXTENSION}"
 
-          # Pastikan direktori user ada di server sebelum upload
           ssh -o StrictHostKeyChecking=no emi@84.46.248.72 "mkdir -p /home/emi/swaplab-project/apps/cordova-app/public/builds/$USER_ID"
-          
-          # Unggah file menggunakan SCP dengan nama file baru
           scp -o StrictHostKeyChecking=no "$ARTIFACT_PATH" emi@84.46.248.72:/home/emi/swaplab-project/apps/cordova-app/public/builds/$USER_ID/$NEW_FILENAME
 
-          # Buat URL download final menggunakan URL PUBLIK
           DOWNLOAD_URL="${{ github.event.client_payload.publicBaseUrl }}/builds/$USER_ID/$NEW_FILENAME"
           
           end_time=$(date +%s)
           duration=$((end_time - start_time))
           
-          # Laporkan status kembali ke server menggunakan URL INTERNAL
           curl --fail -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
@@ -156,7 +137,6 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          # Ambil URL internal langsung dari payload untuk konsistensi
           INTERNAL_API_URL="${{ github.event.client_payload.internalApiUrl }}"
           if [ -z "$INTERNAL_API_URL" ]; then
              echo "::error::Fatal: internalApiUrl not received in payload. Cannot report failure."
@@ -170,35 +150,16 @@ jobs:
           if [ ! -f "${LOG_FILE_PATH}" ]; then
             echo "Build failed very early. Main log file not found." > ${LOG_FILE_PATH}
           fi
-
-          # Upload log (multipart/form-data)
-          UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            -F "logFile=@${LOG_FILE_PATH}" \
-            -F "buildId=$BUILD_ID" \
-            -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
-            "$INTERNAL_API_URL/upload-log/$USER_ID")
           
+          UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -F "logFile=@${LOG_FILE_PATH}" -F "buildId=$BUILD_ID" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" "$INTERNAL_API_URL/upload-log/$USER_ID")
           LOG_FILENAME=$(echo "$UPLOAD_RESPONSE" | sed '$d')
           LOG_SNIPPET=$(tail -n 50 ${LOG_FILE_PATH})
           CLEANED_LOG_SNIPPET=$(echo "$LOG_SNIPPET" | sed -E 's|/home/runner/work/[^/]+/[^/]+|[...]|g')
           ESCAPED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | awk "{printf \"%s\\\\n\", \$0}" | sed 's/$/\\n/' | tr -d '\n')
-          
           end_time=$(date +%s)
           duration=$((end_time - start_time))
-
-          # Laporan status gagal (application/json)
-          curl --fail -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
-            -d '{
-              "buildId": "'"$BUILD_ID"'", 
-              "userId": "'"$USER_ID"'",
-              "status": "failed", 
-              "durationSeconds": "'"$duration"'", 
-              "logFile": "'"$LOG_FILENAME"'",
-              "logSnippet": "'"$ESCAPED_LOG_SNIPPET"'"
-            }' \
-            "$INTERNAL_API_URL/api/github-webhook"
+          
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'","status": "failed", "durationSeconds": "'"$duration"'", "logFile": "'"$LOG_FILENAME"'","logSnippet": "'"$ESCAPED_LOG_SNIPPET"'"}' "$INTERNAL_API_URL/api/github-webhook"
 
       - name: Final check
         id: final_check
