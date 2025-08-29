@@ -115,10 +115,11 @@ jobs:
         if: success()
         shell: bash
         run: |
-          # --- Bagian 1: Temukan file artefak ---
+          # --- Bagian 1: Temukan file dan buat nama file baru (tidak berubah) ---
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
-          
+          BUILD_ID="${{ github.event.client_payload.buildId }}"
+
           ARTIFACT_PATH=""
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
@@ -130,47 +131,32 @@ jobs:
           
           if [ -z "$ARTIFACT_PATH" ]; then echo "::error::Build artifact not found!"; exit 1; fi
           
-          # ===================================================================
-          # [LOGIKA BARU] Membuat nama file unik sesuai permintaan Anda
-          # ===================================================================
-          BUILD_ID="${{ github.event.client_payload.buildId }}"
-
-          # Tentukan prefix berdasarkan buildType
-          if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
-            PREFIX="debug"
-          else
-            PREFIX="release"
-          fi
-
-          # Tentukan ekstensi berdasarkan buildType
-          if [[ "$BUILD_TYPE" == "release-aab" ]]; then
-            EXTENSION="aab"
-          else
-            EXTENSION="apk"
-          fi
-
-          # Gabungkan menjadi nama file final
+          if [[ "$BUILD_TYPE" == "debug-apk" ]]; then PREFIX="debug"; else PREFIX="release"; fi
+          if [[ "$BUILD_TYPE" == "release-aab" ]]; then EXTENSION="aab"; else EXTENSION="apk"; fi
           NEW_FILENAME="${PREFIX}_${BUILD_ID}.${EXTENSION}"
-          echo "New unique filename will be: $NEW_FILENAME"
 
-          # --- Bagian 2: Unggah file menggunakan SCP dengan nama file baru ---
+          # ===================================================================
+          # [LOGIKA BARU] Pastikan direktori user ada di server sebelum upload
+          # ===================================================================
+          echo "Ensuring user directory exists on server..."
+          ssh -o StrictHostKeyChecking=no emi@84.46.248.72 "mkdir -p /home/emi/swaplab-project/apps/cordova-app/public/builds/$USER_ID"
+
+          # --- Bagian 2: Unggah file menggunakan SCP (tidak berubah) ---
           echo "Uploading to server as $NEW_FILENAME..."
           scp -o StrictHostKeyChecking=no "$ARTIFACT_PATH" emi@84.46.248.72:/home/emi/swaplab-project/apps/cordova-app/public/builds/$USER_ID/$NEW_FILENAME
           echo "Upload complete."
 
-          # --- Bagian 3: Laporkan status sukses ke server ---
-          # Membuat URL download menggunakan URL PUBLIK dan NAMA FILE BARU
+          # --- Bagian 3: Laporkan status sukses ke server (tidak berubah) ---
           DOWNLOAD_URL="${{ github.event.client_payload.publicBaseUrl }}/builds/$USER_ID/$NEW_FILENAME"
           
           end_time=$(date +%s)
           duration=$((end_time - start_time))
           
-          # Melaporkan status kembali ke server menggunakan URL INTERNAL
           curl --fail -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             -d '{
-              "buildId": "${{ github.event.client_payload.buildId }}", "userId": "'"$USER_ID"'",
+              "buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'",
               "status": "complete", "durationSeconds": "'"$duration"'", "downloadUrl": "'"$DOWNLOAD_URL"'"
             }' \
             "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
