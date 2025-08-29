@@ -15,6 +15,7 @@ jobs:
       outcome: ${{ steps.final_check.outputs.outcome }}
 
     steps:
+      # ... (semua langkah dari awal sampai build project tetap sama) ...
       - name: Record start time
         shell: bash
         run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
@@ -30,7 +31,7 @@ jobs:
               "userId": "${{ github.event.client_payload.userId }}",
               "status": "in_progress"
             }' \
-            "${{ secrets.SERVER_IP_URL }}/api/github-webhook"
+            "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
 
       - name: Set up Node.js v20
         uses: actions/setup-node@v4
@@ -104,10 +105,6 @@ jobs:
             echo "--- Cordova Build Finished ---"
           } > ../build_log.txt 2>&1
 
-# ===================================================================
-# [PERUBAHAN DIMULAI DI SINI] - Langkah upload diganti dengan SCP
-# ===================================================================
-
       - name: Setup SSH for SCP
         if: success()
         uses: webfactory/ssh-agent@v0.9.0
@@ -121,8 +118,7 @@ jobs:
           # --- Bagian 1: Temukan file artefak ---
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
-          APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
-
+          
           ARTIFACT_PATH=""
           if [[ "$BUILD_TYPE" == "release-aab" ]]; then
             ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
@@ -134,23 +130,42 @@ jobs:
           
           if [ -z "$ARTIFACT_PATH" ]; then echo "::error::Build artifact not found!"; exit 1; fi
           
-          # Ekstrak nama file saja untuk URL download
-          FILENAME=$(basename "$ARTIFACT_PATH")
+          # ===================================================================
+          # [LOGIKA BARU] Membuat nama file unik sesuai permintaan Anda
+          # ===================================================================
+          BUILD_ID="${{ github.event.client_payload.buildId }}"
 
-          # --- Bagian 2: Unggah file menggunakan SCP ---
-          # GANTI 'emi@84.46.248.72' dengan username dan IP server Anda
-          # GANTI '/home/emi/swaplab-project/apps/main-app/public/uploads' dengan path tujuan di server Anda
-          echo "Uploading $FILENAME to server..."
-          scp -o StrictHostKeyChecking=no "$ARTIFACT_PATH" emi@84.46.248.72:/home/emi/swaplab-project/apps/main-app/public/uploads/$FILENAME
+          # Tentukan prefix berdasarkan buildType
+          if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
+            PREFIX="debug"
+          else
+            PREFIX="release"
+          fi
+
+          # Tentukan ekstensi berdasarkan buildType
+          if [[ "$BUILD_TYPE" == "release-aab" ]]; then
+            EXTENSION="aab"
+          else
+            EXTENSION="apk"
+          fi
+
+          # Gabungkan menjadi nama file final
+          NEW_FILENAME="${PREFIX}_${BUILD_ID}.${EXTENSION}"
+          echo "New unique filename will be: $NEW_FILENAME"
+
+          # --- Bagian 2: Unggah file menggunakan SCP dengan nama file baru ---
+          echo "Uploading to server as $NEW_FILENAME..."
+          scp -o StrictHostKeyChecking=no "$ARTIFACT_PATH" emi@84.46.248.72:/home/emi/swaplab-project/apps/cordova-app/public/builds/$USER_ID/$NEW_FILENAME
           echo "Upload complete."
 
           # --- Bagian 3: Laporkan status sukses ke server ---
-          # Buat URL download secara manual berdasarkan path di server
-          DOWNLOAD_URL="$APP_BASE_URL/uploads/$FILENAME"
+          # Membuat URL download menggunakan URL PUBLIK dan NAMA FILE BARU
+          DOWNLOAD_URL="${{ github.event.client_payload.publicBaseUrl }}/builds/$USER_ID/$NEW_FILENAME"
           
           end_time=$(date +%s)
           duration=$((end_time - start_time))
           
+          # Melaporkan status kembali ke server menggunakan URL INTERNAL
           curl --fail -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
@@ -158,47 +173,41 @@ jobs:
               "buildId": "${{ github.event.client_payload.buildId }}", "userId": "'"$USER_ID"'",
               "status": "complete", "durationSeconds": "'"$duration"'", "downloadUrl": "'"$DOWNLOAD_URL"'"
             }' \
-            "$APP_BASE_URL/api/github-webhook"
-
-# ===================================================================
-# [PERUBAHAN SELESAI]
-# ===================================================================
+            "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
 
       - name: Upload Log File and Report Failure
-        # Langkah ini tetap menggunakan curl karena kecil kemungkinannya diblokir
         if: failure()
         shell: bash
         run: |
-          # ... (Isi langkah ini tidak berubah, biarkan seperti aslinya) ...
+          # ... (Langkah ini tidak berubah, sudah menggunakan URL internal) ...
           USER_ID="${{ github.event.client_payload.userId }}"
-          APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
+          INTERNAL_API_URL="${{ github.event.client_payload.internalApiUrl }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
 
           LOG_FILE_PATH="build_log.txt"
-          if [ -f "cordova-project/build_log.txt" ]; then
-            cp cordova-project/build_log.txt ./${LOG_FILE_PATH}
-          elif [ ! -f "${LOG_FILE_PATH}" ]; then
-            echo "Build gagal pada tahap sangat awal. File log utama tidak ditemukan." > ${LOG_FILE_PATH}
+          if [ ! -f "build_log.txt" ]; then
+             echo "Build log not found at root. Checking in project dir..."
+             if [ -f "cordova-project/build_log.txt" ]; then
+                cp cordova-project/build_log.txt ./${LOG_FILE_PATH}
+             elif [ ! -f "${LOG_FILE_PATH}" ]; then
+                echo "Build failed very early. Main log file not found." > ${LOG_FILE_PATH}
+             fi
           fi
 
           UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             -F "logFile=@${LOG_FILE_PATH}" \
             -F "buildId=$BUILD_ID" \
-            -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
-            "$APP_BASE_URL/upload-log/$USER_ID")
-          
-          HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
-          LOG_FILENAME=$(echo "$UPLOAD_RESPONSE" | sed '$d') 
-          
+            -H "X-Build-secret: ${{ secrets.WEBHOOK_SECRET }}" \
+            "$INTERNAL_API_URL/upload-log/$USER_ID")
+
+          LOG_FILENAME=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+
           LOG_SNIPPET=$(tail -n 50 ${LOG_FILE_PATH})
           
-          CLEANED_LOG_SNIPPET=$(echo "$LOG_SNIPPET" | sed -E 's|/home/runner/work/[^/]+/[^/]+|[...]|g')
-          
-          CLEANED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed -E "s|${APP_BASE_URL}/uploads/[^ ]+|[PROTECTED_URL]|g")
-          CLEANED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed -E "s|${APP_BASE_URL}/keystore/[^ ]+|[PROTECTED_URL]|g")
-          
-          ESCAPED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}' | sed 's/$/\\n/' | tr -d '\n')
+          CLEANED_LOG_SNIPPET=$(echo "$LOG_SNIPPET" | sed -E 's|/home/runner/work/[^/]+/[^/]+|[...]|g' | sed -E "s|${{ github.event.client_payload.publicBaseUrl }}/[^ ]+|[PROTECTED_URL]|g")
 
+          ESCAPED_LOG_SNIPPET=$(echo "$CLEANED_LOG_SNIPPET" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}' | sed 's/$/\\n/' | tr -d '\n')
+          
           end_time=$(date +%s)
           duration=$((end_time - start_time))
 
@@ -213,8 +222,7 @@ jobs:
               "logFile": "'"$LOG_FILENAME"'",
               "logSnippet": "'"$ESCAPED_LOG_SNIPPET"'"
             }' \
-            "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
-
+            "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
 
       - name: Final check
         id: final_check
