@@ -105,50 +105,71 @@ jobs:
           } > ../build_log.txt 2>&1
 
 # ===================================================================
-# [PERUBAHAN DIMULAI DI SINI] - Langkah upload lama dihapus
+# [PERUBAHAN DIMULAI DI SINI] - Langkah upload diganti dengan SCP
 # ===================================================================
 
-      - name: Upload Artifact to GitHub
+      - name: Setup SSH for SCP
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: webfactory/ssh-agent@v0.9.0
         with:
-          name: build-artifact-${{ github.event.client_payload.buildId }}
-          path: |
-            cordova-project/platforms/android/app/build/outputs/apk/debug/*.apk
-            cordova-project/platforms/android/app/build/outputs/apk/release/*.apk
-            cordova-project/platforms/android/app/build/outputs/bundle/release/*.aab
-          if-no-files-found: error
-          retention-days: 7
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Report Success to Server
+      - name: Upload Build File via SCP and Report Success
         if: success()
         shell: bash
         run: |
+          # --- Bagian 1: Temukan file artefak ---
+          BUILD_TYPE="${{ github.event.client_payload.buildType }}"
+          USER_ID="${{ github.event.client_payload.userId }}"
+          APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
+
+          ARTIFACT_PATH=""
+          if [[ "$BUILD_TYPE" == "release-aab" ]]; then
+            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+          elif [[ "$BUILD_TYPE" == "release-apk" ]]; then
+            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          else
+            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          fi
+          
+          if [ -z "$ARTIFACT_PATH" ]; then echo "::error::Build artifact not found!"; exit 1; fi
+          
+          # Ekstrak nama file saja untuk URL download
+          FILENAME=$(basename "$ARTIFACT_PATH")
+
+          # --- Bagian 2: Unggah file menggunakan SCP ---
+          # GANTI 'emi@84.46.248.72' dengan username dan IP server Anda
+          # GANTI '/home/emi/swaplab-project/apps/main-app/public/uploads' dengan path tujuan di server Anda
+          echo "Uploading $FILENAME to server..."
+          scp -o StrictHostKeyChecking=no "$ARTIFACT_PATH" emi@84.46.248.72:/home/emi/swaplab-project/apps/main-app/public/uploads/$FILENAME
+          echo "Upload complete."
+
+          # --- Bagian 3: Laporkan status sukses ke server ---
+          # Buat URL download secara manual berdasarkan path di server
+          DOWNLOAD_URL="$APP_BASE_URL/uploads/$FILENAME"
+          
           end_time=$(date +%s)
           duration=$((end_time - start_time))
           
-          # Mengirim notifikasi ke server bahwa build selesai, tanpa menyertakan file.
-          # URL download sekarang merujuk ke halaman artefak GitHub.
           curl --fail -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             -d '{
-              "buildId": "${{ github.event.client_payload.buildId }}", 
-              "userId": "${{ github.event.client_payload.userId }}",
-              "status": "complete", 
-              "durationSeconds": "'"$duration"'", 
-              "downloadUrl": "See GitHub Actions artifacts for download."
+              "buildId": "${{ github.event.client_payload.buildId }}", "userId": "'"$USER_ID"'",
+              "status": "complete", "durationSeconds": "'"$duration"'", "downloadUrl": "'"$DOWNLOAD_URL"'"
             }' \
-            "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
+            "$APP_BASE_URL/api/github-webhook"
 
 # ===================================================================
-# [PERUBAHAN SELESAI] - Langkah upload log tetap sama
+# [PERUBAHAN SELESAI]
 # ===================================================================
 
       - name: Upload Log File and Report Failure
+        # Langkah ini tetap menggunakan curl karena kecil kemungkinannya diblokir
         if: failure()
         shell: bash
         run: |
+          # ... (Isi langkah ini tidak berubah, biarkan seperti aslinya) ...
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
@@ -193,6 +214,7 @@ jobs:
               "logSnippet": "'"$ESCAPED_LOG_SNIPPET"'"
             }' \
             "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
+
 
       - name: Final check
         id: final_check
