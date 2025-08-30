@@ -8,7 +8,6 @@ env:
   JAVA_VERSION: '17'
   GRADLE_VERSION: '8.2.0'
   NODE_VERSION: '20'
-  # DIKEMBALIKAN: Sesuai permintaan, target API diatur ke 35
   ANDROID_API_LEVEL: '35'
   ANDROID_BUILD_TOOLS: '35.0.0'
 
@@ -22,7 +21,7 @@ jobs:
       outcome: ${{ steps.final_check.outputs.outcome }}
 
     steps:
-      # ... (Semua step setup dari awal sampai sebelum build tidak diubah) ...
+      # ... (Step setup tidak diubah) ...
       - name: Record start time
         shell: bash
         run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
@@ -63,6 +62,7 @@ jobs:
           echo "Unzipped project -> listing top-level:"
           ls -la cordova-project | sed -n '1,200p'
 
+      # ... (Step caching tidak diubah) ...
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -74,7 +74,6 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-v${{ env.GRADLE_VERSION }}-
             gradle-${{ runner.os }}-
-
       - name: Cache project node_modules
         uses: actions/cache@v4
         with:
@@ -82,7 +81,6 @@ jobs:
           key: node-modules-${{ runner.os }}-${{ hashFiles('cordova-project/package-lock.json', 'cordova-project/package.json') }}
           restore-keys: |
             node-modules-${{ runner.os }}-
-
       - name: Cache npm local cache
         uses: actions/cache@v4
         with:
@@ -90,7 +88,6 @@ jobs:
           key: npm-cache-${{ runner.os }}-${{ hashFiles('cordova-project/**/package-lock.json') }}
           restore-keys: |
             npm-cache-${{ runner.os }}-
-
       - name: Cache Android SDK components
         uses: actions/cache@v4
         with:
@@ -148,7 +145,6 @@ jobs:
 
       - name: Install Dependencies and Build Project
         id: cordova_build_step
-        # DIPERBAIKI: Menggunakan shell standar dan memindahkan logika `tee` ke dalam `run`
         shell: bash
         env:
           ANDROID_HOME: $HOME/Android/Sdk
@@ -156,6 +152,22 @@ jobs:
           PATH: $HOME/Android/Sdk/platform-tools:$PATH
         run: |
           set -e -o pipefail
+          
+          # =======================================================
+          # == MULAI BLOK DEBUGGING LINGKUNGAN RUNNER
+          # =======================================================
+          echo "--- 🕵️‍♂️ Starting Environment Debugging ---"
+          echo "Current user: $(whoami)"
+          echo "--- Current PATH variable ---"
+          echo "$PATH" | tr ':' '\n'
+          echo "--- Checking for 'tee' command ---"
+          which tee || echo "'which tee' failed to find the command."
+          type -a tee || echo "'type -a tee' failed to find the command."
+          echo "--- Checking if '/usr/bin/tee' exists ---"
+          ls -l /usr/bin/tee || echo "File /usr/bin/tee does not exist."
+          echo "--- ✅ End of Environment Debugging ---"
+          # =======================================================
+
           {
             cd cordova-project
 
@@ -201,14 +213,13 @@ jobs:
             fi
             echo "--- Cordova Build Finished ---"
           } 2>&1 | tee ../build_log.txt
-
+      
       # ... (Sisa workflow tidak diubah) ...
       - name: Setup SSH for SCP
         if: success()
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-
       - name: Upload Build File via SCP and Report Success
         if: success()
         shell: bash
@@ -240,7 +251,6 @@ jobs:
               "status": "complete", "durationSeconds": "'"$duration"'", "downloadUrl": "'"$DOWNLOAD_URL"'"
             }' \
             "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
-
       - name: Upload Log File and Report Failure
         if: failure()
         shell: bash
@@ -259,7 +269,7 @@ jobs:
             echo "Build failed very early. Main log file not found." > ${LOG_FILE_PATH}
           fi
           
-          UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -F "logFile=@${LOG_FILE_PATH}" -F "buildId=$BUILD_ID" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" "$INTERNAL_API_URL/upload-log/$USER_ID")
+          UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -F "logFile=@${LOG_FILE_PATH}" -F "buildId=$BUILD_ID" -H "X-Build-secret: ${{ secrets.WEBHOOK_SECRET }}" "$INTERNAL_API_URL/upload-log/$USER_ID")
           LOG_FILENAME=$(echo "$UPLOAD_RESPONSE" | sed '$d')
           LOG_SNIPPET=$(tail -n 50 ${LOG_FILE_PATH})
           CLEANED_LOG_SNIPPET=$(echo "$LOG_SNIPPET" | sed -E 's|/home/runner/work/[^/]+/[^/]+|[...]|g')
@@ -268,7 +278,6 @@ jobs:
           duration=$((end_time - start_time))
 
           curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'","status": "failed", "durationSeconds": "'"$duration"'", "logFile": "'"$LOG_FILENAME"'","logSnippet": "'"$ESCAPED_LOG_SNIPPET"'"}' "$INTERNAL_API_URL/api/github-webhook"
-
       - name: Final check
         id: final_check
         if: always()
