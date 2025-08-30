@@ -28,7 +28,9 @@ jobs:
             -d '{
               "buildId": "${{ github.event.client_payload.buildId }}",
               "userId": "${{ github.event.client_payload.userId }}",
-              "status": "in_progress"
+              "status": "in_progress",
+              "ciProvider": "github",
+              "runId": "${{ github.run_id }}"
             }' \
             "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
 
