@@ -8,7 +8,6 @@ env:
   JAVA_VERSION: '17'
   GRADLE_VERSION: '8.2.0'
   NODE_VERSION: '20'
-  # lokasi SDK di runner
   ANDROID_SDK_ROOT: $HOME/Android/Sdk
   ANDROID_API_LEVEL: '35'
   ANDROID_BUILD_TOOLS: '35.0.0'
@@ -40,8 +39,7 @@ jobs:
             }' \
             "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
 
-      # --------------- runtimes (no npm cache here) ----------------
-      - name: Setup Node.js (no global npm cache: avoid lockfile check in repo root)
+      - name: Setup Node.js (no global npm cache)
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -79,7 +77,6 @@ jobs:
           restore-keys: |
             android-sdk-${{ runner.os }}-
 
-      # ---------- Download project first (important) ----------
       - name: Download and Unzip Project
         shell: bash
         run: |
@@ -90,13 +87,11 @@ jobs:
           curl -L -f -o cordovaProject.zip "$ZIP_URL"
           unzip -q cordovaProject.zip -d cordova-project
 
-      # ---------- Now we can cache/restore node_modules inside cordova-project ----------
       - name: Cache project node_modules (inside cordova-project)
         uses: actions/cache@v4
         id: node-modules-cache
         with:
           path: cordova-project/node_modules
-          # if package-lock.json exists its hash will be used; otherwise key falls back to runner/os only
           key: node-modules-${{ runner.os }}-${{ hashFiles('cordova-project/package-lock.json', 'cordova-project/package.json') }}
           restore-keys: |
             node-modules-${{ runner.os }}-
@@ -164,7 +159,6 @@ jobs:
           fi
 
           echo "--- Ensure Android platform present ---"
-          # remove/add to ensure platform files match wrapper and build expectations
           cordova platform rm android || true
           cordova platform add android@latest --no-fetch
 
