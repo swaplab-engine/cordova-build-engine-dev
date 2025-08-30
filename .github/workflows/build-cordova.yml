@@ -28,6 +28,7 @@ jobs:
       - name: Report Build In Progress
         shell: bash
         run: |
+          # ... (tidak ada perubahan di sini) ...
           curl --fail -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
@@ -52,6 +53,7 @@ jobs:
       - name: Download and Unzip Project
         shell: bash
         run: |
+          # ... (tidak ada perubahan di sini) ...
           set -e
           ZIP_URL="${{ github.event.client_payload.projectUrl }}"
           echo "Using project URL (internal): $ZIP_URL"
@@ -62,9 +64,8 @@ jobs:
           ls -la cordova-project | sed -n '1,200p'
 
       # ===============================================
-      # BLOK CACHING
+      # BLOK CACHING (Tidak ada perubahan di sini)
       # ===============================================
-
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -110,17 +111,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ steps.npm-global-path.outputs.path }}
-          key: npm-global-${{ runner.os }}-node${{ env.NODE_VERSION }}-cordova-cli-v1 # <-- KUNCI DIPERBAIKI
+          key: npm-global-${{ runner.os }}-node${{ env.NODE_VERSION }}-cordova-cli-v1
 
       - name: Cache Android SDK components
         uses: actions/cache@v4
         with:
           path: |
-            /usr/local/lib/android/sdk/cmdline-tools
-            /usr/local/lib/android/sdk/platforms
-            /usr/local/lib/android/sdk/build-tools
-            /usr/local/lib/android/sdk/platform-tools
-            /usr/local/lib/android/sdk/extras
+            ${{ env.ANDROID_SDK_ROOT }}/cmdline-tools
+            ${{ env.ANDROID_SDK_ROOT }}/platforms
+            ${{ env.ANDROID_SDK_ROOT }}/build-tools
+            ${{ env.ANDROID_SDK_ROOT }}/platform-tools
+            ${{ env.ANDROID_SDK_ROOT }}/extras
             ~/.android
           key: android-sdk-${{ runner.os }}-api${{ env.ANDROID_API_LEVEL }}-bt${{ env.ANDROID_BUILD_TOOLS }}
           restore-keys: |
@@ -134,15 +135,20 @@ jobs:
         shell: bash
         run: npm install -g cordova
 
-      # --- BLOK LAMA DIGANTI DENGAN ACTION DI BAWAH ---
-      - name: Setup Android SDK
-        uses: reactivecircus/android-sdk-manager-action@v2
-        with:
-          packages: >
-            "platform-tools"
-            "platforms;android-${{ env.ANDROID_API_LEVEL }}"
-            "build-tools;${{ env.ANDROID_BUILD_TOOLS }}"
-            "cmdline-tools;latest"
+      # --- [PERUBAHAN UTAMA DI SINI] ---
+      # 1. Setup environment Android SDK dasar
+      - name: Setup Android SDK Environment
+        uses: android-actions/setup-android@v3
+
+      # 2. Instal paket yang dibutuhkan menggunakan sdkmanager
+      - name: Install Android SDK Packages
+        shell: bash
+        run: |
+          set -e
+          echo "y" | sdkmanager "platform-tools"
+          echo "y" | sdkmanager "platforms;android-${{ env.ANDROID_API_LEVEL }}"
+          echo "y" | sdkmanager "build-tools;${{ env.ANDROID_BUILD_TOOLS }}"
+          echo "y" | sdkmanager "cmdline-tools;latest"
         
       - name: Ensure Gradle wrapper version is locked
         shell: bash
@@ -160,7 +166,7 @@ jobs:
       - name: Install Dependencies and Build Project
         id: cordova_build_step
         shell: bash
-        # ANDROID_HOME sudah di-set oleh action `android-sdk-manager-action`
+        # Variabel env tidak perlu didefinisikan lagi, sudah di-set oleh action setup-android
         run: |
           set -e -o pipefail
           {
@@ -218,6 +224,7 @@ jobs:
           
       - name: Upload Build File via SCP and Report Success
         if: success()
+        # ... (tidak ada perubahan di sini) ...
         shell: bash
         run: |
           USER_ID="${{ github.event.client_payload.userId }}"
@@ -250,6 +257,7 @@ jobs:
             
       - name: Upload Log File and Report Failure
         if: failure()
+        # ... (tidak ada perubahan di sini) ...
         shell: bash
         run: |
           INTERNAL_API_URL="${{ github.event.client_payload.internalApiUrl }}"
