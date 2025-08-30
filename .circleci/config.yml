@@ -103,7 +103,6 @@ jobs:
             - node-modules-v2-{{ checksum "cordova-project/package.json" }}
             - node-modules-v2-
 
-      # --- PERBAIKAN FINAL DI SINI ---
       - run:
           name: "Prepare Signing Configuration (Release Only)"
           working_directory: ~/project/cordova-project
@@ -117,7 +116,6 @@ jobs:
                 PACKAGE_TYPE="bundle"
               fi
 
-              # Menggunakan printf untuk menghindari masalah 'here-document'
               printf '{ "android": { "release": { "keystore": "release.jks", "storePassword": "%s", "alias": "%s", "password": "%s", "packageType": "%s" } } }' \
                 "$KEYSTORE_PASSWORD" \
                 "$KEY_ALIAS" \
@@ -130,7 +128,8 @@ jobs:
           name: "Install Project Dependencies"
           working_directory: ~/project/cordova-project
           command: |
-            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Menginstal dependensi proyek (npm install)..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
+            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Menginstal dependensi proyek (npm install)..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook";
+            
             npm install > ../npm_install_log.txt 2>&1
 
       - run:
@@ -138,7 +137,8 @@ jobs:
           working_directory: ~/project/cordova-project
           no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
           command: |
-            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Memulai kompilasi Android (proses ini mungkin lama)..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
+            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Memulai kompilasi Android (proses ini mungkin lama)..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook";
+            
             {
               echo "--- Adding Android Platform & Building ---"
               cordova platform add android
