@@ -11,7 +11,6 @@ jobs:
       contents: read
     timeout-minutes: ${{ github.event.client_payload.timeoutMinutes || 8 }}
 
-    # ID ini penting untuk referensi di langkah terakhir
     outputs:
       outcome: ${{ steps.final_check.outputs.outcome }}
 
@@ -44,15 +43,33 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      # MODIFIKASI: Cache untuk npm global yang lebih spesifik
       - name: Cache global npm packages
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-global-v3
+          key: ${{ runner.os }}-npm-global-cache-v4 # Kunci diubah agar cache baru dibuat
+
+      # PENAMBAHAN: Cache untuk hasil instalasi global Cordova CLI
+      - name: Cache Cordova CLI installation
+        id: cache-cordova-cli
+        uses: actions/cache@v4
+        with:
+          path: /opt/hostedtoolcache/node/20.*.*/lib/node_modules/cordova
+          key: ${{ runner.os }}-cordova-cli-v1
 
       - name: Install Cordova CLI
         shell: bash
-        run: npm install -g cordova
+        # Hanya instal jika cache tidak ditemukan
+        run: |
+          if [ ! -d "/opt/hostedtoolcache/node/20.*.*/lib/node_modules/cordova" ]; then
+            echo "Cordova CLI not found in cache, installing..."
+            npm install -g cordova
+          else
+            echo "Cordova CLI restored from cache."
+          fi
+          # Tambahkan bin path ke GITHUB_PATH agar bisa dieksekusi
+          echo "/opt/hostedtoolcache/node/20.*.*/bin" >> $GITHUB_PATH
 
       - name: Download and Unzip Project
         shell: bash
@@ -61,6 +78,16 @@ jobs:
           curl -L -o cordovaProject.zip "$ZIP_URL"
           mkdir cordova-project
           unzip cordovaProject.zip -d cordova-project
+
+      # PENAMBAHAN: Cache untuk dependensi proyek (node_modules lokal)
+      - name: Cache project dependencies (node_modules)
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: cordova-project/node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('cordova-project/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
 
       - name: Prepare Signing Configuration
         if: ${{ startsWith(github.event.client_payload.buildType, 'release') }}
@@ -93,7 +120,12 @@ jobs:
           cd cordova-project
           {
             echo "--- Installing Project Dependencies ---"
-            npm install
+            # Gunakan 'npm ci' untuk instalasi yang lebih cepat dan konsisten dari cache
+            if [ -f "package-lock.json" ]; then
+              npm ci
+            else
+              npm install
+            fi
             echo "--- Adding Android Platform ---"
             cordova platform add android
             echo "--- Starting Cordova Build ---"
@@ -104,7 +136,8 @@ jobs:
             fi
             echo "--- Cordova Build Finished ---"
           } > ../build_log.txt 2>&1
-
+    
+      # ... sisa langkah Anda tetap sama (Upload Build, Report Failure, etc.) ...
       - name: Upload Build File and Report Success
         if: success()
         shell: bash
@@ -130,12 +163,12 @@ jobs:
             -F "buildType=$BUILD_TYPE" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             "$APP_BASE_URL/upload-result/$USER_ID")
-
+          
           HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
           DOWNLOAD_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
 
           if [[ "$HTTP_CODE" != "200" ]]; then echo "::error::Gagal upload. Kode: $HTTP_CODE"; exit 1; fi
-
+          
           end_time=$(date +%s)
           duration=$((end_time - start_time))
 
@@ -148,7 +181,6 @@ jobs:
             }' \
             "$APP_BASE_URL/api/github-webhook"
 
-      # **PERBAIKAN UTAMA PADA PENANGANAN ERROR**
       - name: Upload Log File and Report Failure
         if: failure()
         shell: bash
@@ -157,7 +189,6 @@ jobs:
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
 
-          # Salin log dari direktori proyek jika ada
           if [ -f "cordova-project/build_log.txt" ]; then
             cp cordova-project/build_log.txt ./build_log.txt
           elif [ ! -f "build_log.txt" ]; then
@@ -169,12 +200,12 @@ jobs:
             -F "buildId=$BUILD_ID" \
             -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
             "$APP_BASE_URL/upload-log/$USER_ID")
-
+          
           HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
           LOG_URL=$(echo "$UPLOAD_RESPONSE" | sed '$d')
 
           if [[ "$HTTP_CODE" != "200" ]]; then LOG_URL=""; fi
-
+          
           end_time=$(date +%s)
           duration=$((end_time - start_time))
 
@@ -192,5 +223,4 @@ jobs:
         if: always()
         shell: bash
         run: |
-          # job.status tersedia sebagai ekspresi GitHub Actions; tulis ke GITHUB_OUTPUT supaya dapat dipakai sebagai output job
           echo "outcome=${{ job.status }}" >> $GITHUB_OUTPUT
