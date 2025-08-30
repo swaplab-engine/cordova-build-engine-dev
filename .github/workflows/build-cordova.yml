@@ -8,10 +8,10 @@ env:
   JAVA_VERSION: '17'
   GRADLE_VERSION: '8.2.0'
   NODE_VERSION: '20'
-  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-  ANDROID_API_LEVEL: '35'         # ubah sesuai kebutuhan target (mis. 33)
-  ANDROID_BUILD_TOOLS: '35.0.0'   # ubah jika perlu
-  GRADLE_USER_HOME: ${{ runner.temp }}/.gradle
+  # gunakan lokasi SDK standar di runner ubuntu
+  ANDROID_SDK_ROOT: $HOME/Android/Sdk
+  ANDROID_API_LEVEL: '35'
+  ANDROID_BUILD_TOOLS: '35.0.0'
 
 jobs:
   build:
@@ -40,7 +40,7 @@ jobs:
             }' \
             "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
 
-      # ---------- Setup runtime + caches ----------
+      # ---------------- Setup runtimes & caches ----------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -54,13 +54,11 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           cache: gradle
 
-      - name: Cache Gradle (caches & wrapper)
+      - name: Cache Gradle (wrapper & caches)
         uses: actions/cache@v4
         id: gradle-cache
         with:
           path: |
-            ${{ env.GRADLE_USER_HOME }}/caches
-            ${{ env.GRADLE_USER_HOME }}/wrapper
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-v${{ env.GRADLE_VERSION }}-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties') }}
@@ -82,7 +80,7 @@ jobs:
           restore-keys: |
             android-sdk-${{ runner.os }}-
 
-      - name: Cache project node_modules (will be populated after unzip)
+      - name: Cache project node_modules
         uses: actions/cache@v4
         id: node-modules-cache
         with:
@@ -91,7 +89,7 @@ jobs:
           restore-keys: |
             node-modules-${{ runner.os }}-
 
-      - name: Cache npm global cache
+      - name: Cache npm local cache
         uses: actions/cache@v4
         with:
           path: ~/.npm
@@ -99,34 +97,25 @@ jobs:
           restore-keys: |
             npm-cache-${{ runner.os }}-
 
-      # ---------- Install Android SDK bits (if missing) ----------
-      - name: Ensure Android SDK root exists
-        run: |
-          sudo mkdir -p "${{ env.ANDROID_SDK_ROOT }}"
-          sudo chown -R $USER: "$ANDROID_SDK_ROOT"
-
-      - name: Install required Android SDK components (if missing)
+      # -------------- Install Android SDK bits (only if missing) --------------
+      - name: Ensure Android SDK root exists and cmdline-tools
         shell: bash
         run: |
           set -e
-          # PATH update to use sdkmanager if present
-          export ANDROID_SDK_ROOT=${{ env.ANDROID_SDK_ROOT }}
-          export PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/tools/bin:$PATH
-
-          # If cmdline-tools not present, install latest commandline tools from distro (minimal)
-          if [ ! -d "$ANDROID_SDK_ROOT/cmdline-tools/latest" ]; then
+          mkdir -p "${ANDROID_SDK_ROOT}"
+          sudo chown -R $USER: "${ANDROID_SDK_ROOT}"
+          # Ensure commandline-tools exists
+          if [ ! -d "${ANDROID_SDK_ROOT}/cmdline-tools/latest" ]; then
             mkdir -p /tmp/cmdline
             cd /tmp/cmdline
-            # download commandline tools
-            curl -sS -L "https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip" -o cmdline.zip || true
-            unzip -q cmdline.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
-            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest" || true
+            curl -sS -L "https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip" -o cmdline.zip
+            unzip -q cmdline.zip -d "${ANDROID_SDK_ROOT}/cmdline-tools"
+            mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest" || true
           fi
+          export PATH="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/tools/bin:$PATH"
+          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || true
+          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS}" || true
 
-          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null || true
-          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" "platform-tools" "platforms;android-${{ env.ANDROID_API_LEVEL }}" "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" || true
-
-      # ---------- Prepare build environment ----------
       - name: Install Cordova CLI (global)
         shell: bash
         run: npm install -g cordova
@@ -141,7 +130,7 @@ jobs:
           curl -L -f -o cordovaProject.zip "$ZIP_URL"
           unzip -q cordovaProject.zip -d cordova-project
 
-      - name: Ensure Gradle wrapper version is locked to 8.2.0 (if project uses wrapper)
+      - name: Ensure Gradle wrapper version is locked to 8.2.0 (if gradlew present)
         shell: bash
         run: |
           set -e
@@ -151,20 +140,18 @@ jobs:
             chmod +x ./gradlew
             ./gradlew wrapper --gradle-version=${GRADLE_VERSION} --distribution-type=all || true
           else
-            echo "No gradlew found in project — relying on system Gradle (not recommended)."
+            echo "No gradlew found in project — will rely on system Gradle (not recommended)."
           fi
 
-      # restore node-modules cache key was declared earlier; now install dependencies
       - name: Install Dependencies and Build Project
         id: cordova_build_step
         shell: bash
         env:
-          GRADLE_USER_HOME: ${{ env.GRADLE_USER_HOME }}
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
           ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          PATH: ${{ env.ANDROID_SDK_ROOT }}/platform-tools:$PATH
         run: |
           set -e
-          # redirect log to top-level for easier upload on failure
           exec &> ../build_log.txt
 
           cd cordova-project
@@ -176,15 +163,11 @@ jobs:
           fi
 
           echo "--- Ensure Android platform present ---"
-          # If project already has android platform, this will be a no-op
           cordova platform rm android || true
           cordova platform add android@latest --no-fetch
 
-          echo "--- Gradle and Android build configuration ---"
+          echo "--- Gradle settings ---"
           export GRADLE_OPTS="-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx1536m"
-          # Set ANDROID_HOME for gradle/cordova
-          export ANDROID_HOME=${{ env.ANDROID_SDK_ROOT }}
-          export PATH=$ANDROID_HOME/platform-tools:$PATH
 
           echo "--- Starting Cordova Build ---"
           if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
@@ -214,7 +197,6 @@ jobs:
           fi
           echo "--- Cordova Build Finished ---"
 
-      # ---------- upload artifact ----------
       - name: Setup SSH for SCP
         if: success()
         uses: webfactory/ssh-agent@v0.9.0
