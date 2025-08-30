@@ -60,8 +60,9 @@ jobs:
           command: |
             echo 'export START_TIME=$(date +%s)' >> $BASH_ENV
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Memulai proses build..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
-            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "in_progress", "ciProvider": "circleci"}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
+            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "in_progress", "ciProvider": "circleci", "runId": "'"$CIRCLE_WORKFLOW_ID"'"}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
 
+           
       - run:
           name: "Report Environment Setup"
           command: |
