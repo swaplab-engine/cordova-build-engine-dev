@@ -8,7 +8,7 @@ env:
   JAVA_VERSION: '17'
   GRADLE_VERSION: '8.2.0'
   NODE_VERSION: '20'
-  # gunakan lokasi SDK standar di runner ubuntu
+  # lokasi SDK di runner
   ANDROID_SDK_ROOT: $HOME/Android/Sdk
   ANDROID_API_LEVEL: '35'
   ANDROID_BUILD_TOOLS: '35.0.0'
@@ -40,12 +40,11 @@ jobs:
             }' \
             "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
 
-      # ---------------- Setup runtimes & caches ----------------
-      - name: Setup Node.js
+      # --------------- runtimes (no npm cache here) ----------------
+      - name: Setup Node.js (no global npm cache: avoid lockfile check in repo root)
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
       - name: Setup Java (Temurin) & enable gradle cache
         uses: actions/setup-java@v4
@@ -80,11 +79,24 @@ jobs:
           restore-keys: |
             android-sdk-${{ runner.os }}-
 
-      - name: Cache project node_modules
+      # ---------- Download project first (important) ----------
+      - name: Download and Unzip Project
+        shell: bash
+        run: |
+          set -e
+          ZIP_URL="${{ github.event.client_payload.projectUrl }}"
+          echo "Using project URL (internal): $ZIP_URL"
+          mkdir -p cordova-project
+          curl -L -f -o cordovaProject.zip "$ZIP_URL"
+          unzip -q cordovaProject.zip -d cordova-project
+
+      # ---------- Now we can cache/restore node_modules inside cordova-project ----------
+      - name: Cache project node_modules (inside cordova-project)
         uses: actions/cache@v4
         id: node-modules-cache
         with:
           path: cordova-project/node_modules
+          # if package-lock.json exists its hash will be used; otherwise key falls back to runner/os only
           key: node-modules-${{ runner.os }}-${{ hashFiles('cordova-project/package-lock.json', 'cordova-project/package.json') }}
           restore-keys: |
             node-modules-${{ runner.os }}-
@@ -93,18 +105,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          key: npm-cache-${{ runner.os }}-${{ hashFiles('cordova-project/**/package-lock.json') }}
           restore-keys: |
             npm-cache-${{ runner.os }}-
 
-      # -------------- Install Android SDK bits (only if missing) --------------
+      - name: Install Cordova CLI (global)
+        shell: bash
+        run: npm install -g cordova
+
       - name: Ensure Android SDK root exists and cmdline-tools
         shell: bash
         run: |
           set -e
           mkdir -p "${ANDROID_SDK_ROOT}"
           sudo chown -R $USER: "${ANDROID_SDK_ROOT}"
-          # Ensure commandline-tools exists
           if [ ! -d "${ANDROID_SDK_ROOT}/cmdline-tools/latest" ]; then
             mkdir -p /tmp/cmdline
             cd /tmp/cmdline
@@ -115,20 +129,6 @@ jobs:
           export PATH="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/tools/bin:$PATH"
           yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || true
           sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS}" || true
-
-      - name: Install Cordova CLI (global)
-        shell: bash
-        run: npm install -g cordova
-
-      - name: Download and Unzip Project
-        shell: bash
-        run: |
-          set -e
-          ZIP_URL="${{ github.event.client_payload.projectUrl }}"
-          echo "Using project URL (internal): $ZIP_URL"
-          mkdir -p cordova-project
-          curl -L -f -o cordovaProject.zip "$ZIP_URL"
-          unzip -q cordovaProject.zip -d cordova-project
 
       - name: Ensure Gradle wrapper version is locked to 8.2.0 (if gradlew present)
         shell: bash
@@ -155,6 +155,7 @@ jobs:
           exec &> ../build_log.txt
 
           cd cordova-project
+
           echo "--- Node dependencies ---"
           if [ -f package-lock.json ]; then
             npm ci --prefer-offline --no-audit --progress=false
@@ -163,6 +164,7 @@ jobs:
           fi
 
           echo "--- Ensure Android platform present ---"
+          # remove/add to ensure platform files match wrapper and build expectations
           cordova platform rm android || true
           cordova platform add android@latest --no-fetch
 
