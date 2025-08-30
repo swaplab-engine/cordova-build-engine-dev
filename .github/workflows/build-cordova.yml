@@ -124,7 +124,7 @@ jobs:
 
           if [ -z "$ARTIFACT_PATH" ]; then echo "::error::Build artifact not found!"; exit 1; fi
 
-          UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" --fail -X POST \
+          UPLOAD_RESPONSE=$(curl -v -s -w "\n%{http_code}" --fail -X POST \
             -F "buildFile=@$ARTIFACT_PATH" \
             -F "buildId=${{ github.event.client_payload.buildId }}" \
             -F "buildType=$BUILD_TYPE" \
