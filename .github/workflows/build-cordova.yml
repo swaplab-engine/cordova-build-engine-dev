@@ -43,6 +43,7 @@ jobs:
       # 3. PROSES CACHING UNTUK PERCEPATAN
       # ===================================================================
       - name: Restore All Caches
+        id: cache-all
         uses: actions/cache@v4
         with:
           path: |
@@ -62,6 +63,7 @@ jobs:
         id: cordova_build_step
         shell: bash
         run: |
+          set -e
           send_log() {
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d "{\"buildId\": \"${{ github.event.client_payload.buildId }}\", \"userId\": \"${{ github.event.client_payload.userId }}\", \"status\": \"log_update\", \"message\": \"$1\"}" "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
           }
@@ -84,14 +86,20 @@ jobs:
             send_log "Mempersiapkan konfigurasi rilis..."
             curl -L -o release.jks "${{ github.event.client_payload.keystoreUrl }}"
             PACKAGE_TYPE="apk"
-            if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then PACKAGE_TYPE="bundle"; fi
+            if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
+              PACKAGE_TYPE="bundle"
+            fi
             cat > build.json << EOF
             { "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } } }
 EOF
           fi
 
           send_log "Menginstal dependensi proyek (npm install)..."
-          if [ -f "package-lock.json" ]; then npm ci > ../npm_install_log.txt 2>&1; else npm install > ../npm_install_log.txt 2>&1; fi
+          if [ -f "package-lock.json" ]; then
+            npm ci > ../npm_install_log.txt 2>&1
+          else
+            npm install > ../npm_install_log.txt 2>&1
+          fi
           
           send_log "Memulai kompilasi Android (proses ini mungkin lama)..."
           {
