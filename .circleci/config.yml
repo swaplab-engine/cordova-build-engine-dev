@@ -146,7 +146,7 @@ jobs:
                 PACKAGE_TYPE="bundle"
               fi
 
-              cat > build.json << EOF
+              cat > build.json \<< EOF
               { "android": { "release": { "keystore": "release.jks", "storePassword": "$KEYSTORE_PASSWORD", "alias": "$KEY_ALIAS", "password": "$KEY_PASSWORD", "packageType": "$PACKAGE_TYPE" } } }
               EOF
             fi
