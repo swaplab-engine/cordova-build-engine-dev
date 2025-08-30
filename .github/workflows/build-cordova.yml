@@ -24,21 +24,14 @@ jobs:
       - name: Report Build In Progress
         shell: bash
         run: |
-          # Kirim log pertama kali bahwa proses dimulai
           curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Memulai proses build..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
-          
-          # Kirim status 'in_progress' untuk memulai timer di UI dan melacak run_id untuk fungsi cancel
           curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "in_progress", "ciProvider": "github", "runId": "${{ github.run_id }}"}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
 
       # ===================================================================
       # 2. SETUP LINGKUNGAN BUILD
       # ===================================================================
       - name: Set up Build Environment
-        shell: bash
-        run: |
-          # Kirim log update
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Mempersiapkan lingkungan (Node.js & Java)..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
-      - uses: actions/setup-node@v4
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
       - uses: actions/setup-java@v4
@@ -49,11 +42,8 @@ jobs:
       # ===================================================================
       # 3. PROSES CACHING UNTUK PERCEPATAN
       # ===================================================================
-      - name: Check and Restore Cache
-        shell: bash
-        run: |
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Memeriksa cache untuk percepatan build..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
-      - uses: actions/cache@v4
+      - name: Cache All Dependencies
+        uses: actions/cache@v4
         with:
           path: ~/.npm
           key: ${{ runner.os }}-npm-global-cache-v4
@@ -61,57 +51,13 @@ jobs:
         with:
           path: /opt/hostedtoolcache/node/20.*.*/lib/node_modules/cordova
           key: ${{ runner.os }}-cordova-cli-v1
-
-      # ===================================================================
-      # 4. PERSIAPAN PROYEK CORDOVA
-      # ===================================================================
-      - name: Install Cordova CLI
-        shell: bash
-        run: |
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Menginstal Cordova CLI..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
-          if [ ! -d "/opt/hostedtoolcache/node/20.*.*/lib/node_modules/cordova" ]; then
-            npm install -g cordova
-          else
-            echo "Cordova CLI dipulihkan dari cache."
-          fi
-          echo "/opt/hostedtoolcache/node/20.*.*/bin" >> $GITHUB_PATH
-
-      - name: Download and Unzip Project
-        shell: bash
-        run: |
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Mengunduh dan mengekstrak proyek..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
-          curl -L -o cordovaProject.zip "${{ github.event.client_payload.projectUrl }}"
-          mkdir cordova-project
-          unzip cordovaProject.zip -d cordova-project
-
       - uses: actions/cache@v4
-        name: Cache project dependencies (node_modules)
         with:
           path: cordova-project/node_modules
           key: ${{ runner.os }}-node-modules-${{ hashFiles('cordova-project/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-modules-
-      
-      - name: Prepare Signing Configuration
-        if: ${{ startsWith(github.event.client_payload.buildType, 'release') }}
-        shell: bash
-        run: |
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Mempersiapkan konfigurasi rilis..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
-          cd cordova-project
-          curl -L -o release.jks "${{ github.event.client_payload.keystoreUrl }}"
-          PACKAGE_TYPE="apk"
-          if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
-            PACKAGE_TYPE="bundle"
-          fi
-          cat > build.json << EOF
-          { "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } } }
-          EOF
-
-      # ===================================================================
-      # 5. PROSES BUILD UTAMA
-      # ===================================================================
       - uses: actions/cache@v4
-        name: Cache Gradle packages
         with:
           path: |
             ~/.gradle/caches
@@ -119,56 +65,68 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/gradle*') }}
           restore-keys: ${{ runner.os }}-gradle-
 
-      - name: Install Dependencies and Build Project
+      # ===================================================================
+      # 4. PERSIAPAN PROYEK DAN BUILD
+      # ===================================================================
+      - name: Prepare and Build Project
         id: cordova_build_step
         shell: bash
         run: |
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Menginstal dependensi proyek (npm install)..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
+          send_log() {
+            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d "{\"buildId\": \"${{ github.event.client_payload.buildId }}\", \"userId\": \"${{ github.event.client_payload.userId }}\", \"status\": \"log_update\", \"message\": \"$1\"}" "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
+          }
+
+          send_log "Mempersiapkan lingkungan build..."
           
+          if [ ! -d "/opt/hostedtoolcache/node/20.*.*/lib/node_modules/cordova" ]; then npm install -g cordova; else echo "Cordova CLI dipulihkan dari cache."; fi
+          echo "/opt/hostedtoolcache/node/20.*.*/bin" >> $GITHUB_PATH
+          
+          send_log "Mengunduh dan mengekstrak proyek..."
+          curl -L -o cordovaProject.zip "${{ github.event.client_payload.projectUrl }}"
+          mkdir cordova-project && unzip cordovaProject.zip -d cordova-project
           cd cordova-project
-          if [ -f "package-lock.json" ]; then
-            npm ci > ../npm_install_log.txt 2>&1
-          else
-            npm install > ../npm_install_log.txt 2>&1
+          
+          if [[ "${{ startsWith(github.event.client_payload.buildType, 'release') }}" == "true" ]]; then
+            send_log "Mempersiapkan konfigurasi rilis..."
+            curl -L -o release.jks "${{ github.event.client_payload.keystoreUrl }}"
+            PACKAGE_TYPE="apk"
+            if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then PACKAGE_TYPE="bundle"; fi
+            cat > build.json << EOF
+            { "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } } }
+            EOF
           fi
 
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Memulai kompilasi Android (proses ini mungkin lama)..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
+          send_log "Menginstal dependensi proyek (npm install)..."
+          if [ -f "package-lock.json" ]; then npm ci > ../npm_install_log.txt 2>&1; else npm install > ../npm_install_log.txt 2>&1; fi
           
+          send_log "Memulai kompilasi Android (proses ini mungkin lama)..."
           {
-            echo "--- Adding Android Platform & Building ---"
-            cordova platform add android
+            cordova platform add android && \
             if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
               cordova build android --debug -- --gradleArg=--no-daemon
             else
               cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
             fi
-            echo "--- Cordova Build Finished ---"
           } > ../build_log.txt 2>&1
 
       # ===================================================================
-      # 6. PENYELESAIAN DAN PELAPORAN HASIL
+      # 5. PENYELESAIAN DAN PELAPORAN HASIL
       # ===================================================================
       - name: Finalizing and Uploading Artifact
         shell: bash
         run: |
           curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Menyelesaikan dan mengemas hasil build..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
-
+      
       - name: Upload Build File and Report Success
         if: success()
         shell: bash
         run: |
-          # ... (Langkah ini tetap sama, tidak ada perubahan) ...
+          # ... (Langkah ini tetap sama) ...
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           ARTIFACT_PATH=""
-          if [[ "$BUILD_TYPE" == "release-aab" ]]; then
-            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
-          elif [[ "$BUILD_TYPE" == "release-apk" ]]; then
-            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          else
-            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-          fi
+          if [[ "$BUILD_TYPE" == "release-aab" ]]; then ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1); elif [[ "$BUILD_TYPE" == "release-apk" ]]; then ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1); else ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1); fi
           if [ -z "$ARTIFACT_PATH" ]; then echo "::error::Build artifact not found!"; exit 1; fi
           UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" --fail -X POST -F "buildFile=@$ARTIFACT_PATH" -F "buildId=${{ github.event.client_payload.buildId }}" -F "buildType=$BUILD_TYPE" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" "$APP_BASE_URL/upload-result/$USER_ID")
           HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
@@ -182,7 +140,6 @@ jobs:
         if: failure() || cancelled()
         shell: bash
         run: |
-          # ... (Langkah ini tetap sama, tidak ada perubahan) ...
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
@@ -195,7 +152,10 @@ jobs:
           if [[ "$HTTP_CODE" == "200" ]]; then LOG_URL="${APP_BASE_URL}/logs/github/${USER_ID}/${LOG_URL_FILENAME}"; fi
           end_time=$(date +%s)
           duration=$((end_time - start_time))
-          LOG_SNIPPET=$(tail -n 20 final_log.txt | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          
+          # MODIFIKASI: Tambahkan `sed` untuk memfilter path sensitif sebelum membuat snippet
+          LOG_SNIPPET=$(tail -n 20 final_log.txt | sed 's|/home/runner/work/[^ ]*|...|g' | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          
           curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d "{\"buildId\": \"$BUILD_ID\", \"userId\": \"$USER_ID\", \"status\": \"failed\", \"durationSeconds\": \"$duration\", \"logUrl\": \"$LOG_URL\", \"logSnippet\": \"$LOG_SNIPPET\", \"ciProvider\": \"github\"}" "$APP_BASE_URL/api/github-webhook"
 
       - name: Final check
