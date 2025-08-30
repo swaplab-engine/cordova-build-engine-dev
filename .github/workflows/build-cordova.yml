@@ -5,9 +5,12 @@ on:
     types: [trigger-build]
 
 env:
+  # CATATAN: JDK 17 diperlukan untuk cordova-android@13+
   JAVA_VERSION: '17'
   GRADLE_VERSION: '8.2.0'
   NODE_VERSION: '20'
+  # CATATAN: API 35 adalah versi pratinjau (Android 15), mungkin kurang stabil.
+  # Pertimbangkan menggunakan '34' untuk versi stabil.
   ANDROID_API_LEVEL: '35'
   ANDROID_BUILD_TOOLS: '35.0.0'
 
@@ -38,18 +41,17 @@ jobs:
             }' \
             "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
 
-      - name: Setup Node.js (no repo-level npm cache)
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Setup Java (Temurin) — no gradle cache here
+      - name: Setup Java (Temurin)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
-      # ---------------- Download project first ----------------
       - name: Download and Unzip Project
         shell: bash
         run: |
@@ -59,14 +61,11 @@ jobs:
           mkdir -p cordova-project
           curl -L -f -o cordovaProject.zip "$ZIP_URL"
           unzip -q cordovaProject.zip -d cordova-project
-          # show a quick summary for debugging
           echo "Unzipped project -> listing top-level:"
           ls -la cordova-project | sed -n '1,200p'
 
-      # ---------- Now caches that depend on project files ----------
-      - name: Cache Gradle (wrapper & caches) — after project unzip
+      - name: Cache Gradle
         uses: actions/cache@v4
-        id: gradle-cache
         with:
           path: |
             ~/.gradle/caches
@@ -77,9 +76,8 @@ jobs:
             gradle-${{ runner.os }}-v${{ env.GRADLE_VERSION }}-
             gradle-${{ runner.os }}-
 
-      - name: Cache project node_modules (inside cordova-project)
+      - name: Cache project node_modules
         uses: actions/cache@v4
-        id: node-modules-cache
         with:
           path: cordova-project/node_modules
           key: node-modules-${{ runner.os }}-${{ hashFiles('cordova-project/package-lock.json', 'cordova-project/package.json') }}
@@ -96,7 +94,6 @@ jobs:
 
       - name: Cache Android SDK components
         uses: actions/cache@v4
-        id: android-sdk-cache
         with:
           path: |
             $HOME/Android/Sdk/platforms
@@ -120,15 +117,15 @@ jobs:
           echo "Using SDK_ROOT=$SDK_ROOT"
           mkdir -p "${SDK_ROOT}"
           sudo chown -R $USER: "${SDK_ROOT}"
-
+          
           if [ ! -d "${SDK_ROOT}/cmdline-tools/latest" ]; then
             tmpdir=$(mktemp -d)
             cd "$tmpdir"
             echo "Downloading Android commandline tools..."
-            curl -sS -L "https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip" -o cmdline.zip
-            unzip -q cmdline.zip -d cmdline-tools
+            curl -sS -L "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o cmdline.zip
+            unzip -q cmdline.zip
             mkdir -p "${SDK_ROOT}/cmdline-tools"
-            mv cmdline-tools/cmdline-tools "${SDK_ROOT}/cmdline-tools/latest" || true
+            mv cmdline-tools "${SDK_ROOT}/cmdline-tools/latest" || true
             cd -
             rm -rf "$tmpdir"
           fi
@@ -137,7 +134,7 @@ jobs:
           yes | sdkmanager --sdk_root="${SDK_ROOT}" --licenses >/dev/null || true
           sdkmanager --sdk_root="${SDK_ROOT}" "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS}" || true
 
-      - name: Ensure Gradle wrapper version is locked to 8.2.0 (if gradlew present)
+      - name: Ensure Gradle wrapper version is locked
         shell: bash
         run: |
           set -e
@@ -159,7 +156,7 @@ jobs:
           PATH: $HOME/Android/Sdk/platform-tools:$PATH
         run: |
           set -e
-          # redirect semua output ke top-level build_log.txt (upload saat gagal)
+          # Redirect semua output ke top-level build_log.txt (upload saat gagal)
           exec &> ../build_log.txt
 
           cd cordova-project
@@ -172,9 +169,10 @@ jobs:
           fi
 
           echo "--- Ensure Android platform present ---"
-          # remove/add to ensure platform files match wrapper and build expectations
+          # Menghapus dan menambah platform untuk memastikan file sesuai
           cordova platform rm android || true
-          cordova platform add android@latest --no-fetch
+          # Menggunakan versi spesifik sesuai permintaan
+          cordova platform add android@14.0.1 --no-fetch
 
           echo "--- Gradle settings ---"
           export GRADLE_OPTS="-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx1536m"
@@ -207,6 +205,14 @@ jobs:
           fi
           echo "--- Cordova Build Finished ---"
 
+      # PENTING: Step ini akan menampilkan log error jika step di atas gagal
+      - name: Display Build Log on Failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "--- Build failed. Displaying contents of build_log.txt ---"
+          cat build_log.txt
+          
       - name: Setup SSH for SCP
         if: success()
         uses: webfactory/ssh-agent@v0.9.0
@@ -220,7 +226,7 @@ jobs:
           USER_ID="${{ github.event.client_payload.userId }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
-
+          
           ARTIFACT_PATH=$(find cordova-project/platforms/android/app -name "*.aab" -o -name "*.apk" | head -n 1)
           if [ -z "$ARTIFACT_PATH" ]; then echo "::error::Build artifact not found!"; exit 1; fi
 
@@ -251,18 +257,18 @@ jobs:
         run: |
           INTERNAL_API_URL="${{ github.event.client_payload.internalApiUrl }}"
           if [ -z "$INTERNAL_API_URL" ]; then
-             echo "::error::Fatal: internalApiUrl not received in payload. Cannot report failure."
-             exit 1
+              echo "::error::Fatal: internalApiUrl not received in payload. Cannot report failure."
+              exit 1
           fi
 
           USER_ID="${{ github.event.client_payload.userId }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
-
+          
           LOG_FILE_PATH="build_log.txt"
           if [ ! -f "${LOG_FILE_PATH}" ]; then
             echo "Build failed very early. Main log file not found." > ${LOG_FILE_PATH}
           fi
-
+          
           UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -F "logFile=@${LOG_FILE_PATH}" -F "buildId=$BUILD_ID" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" "$INTERNAL_API_URL/upload-log/$USER_ID")
           LOG_FILENAME=$(echo "$UPLOAD_RESPONSE" | sed '$d')
           LOG_SNIPPET=$(tail -n 50 ${LOG_FILE_PATH})
