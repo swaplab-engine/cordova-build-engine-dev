@@ -103,17 +103,27 @@ jobs:
             - node-modules-v2-{{ checksum "cordova-project/package.json" }}
             - node-modules-v2-
 
-     - run:
-          name: "Prepare Signing Configuration"
+      # --- PERBAIKAN FINAL DI SINI ---
+      - run:
+          name: "Prepare Signing Configuration (Release Only)"
+          working_directory: ~/project/cordova-project
           command: |
-            if [[ "<< pipeline.parameters.buildType >>" == "release-apk" || "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
-              cd cordova-project
-              curl -L -o release.jks "<< pipeline.parameters.keystoreUrl >>"
+            if [[ "$BUILD_TYPE" == "release-apk" || "$BUILD_TYPE" == "release-aab" ]]; then
+              curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Mempersiapkan konfigurasi rilis..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
+              curl -L -o release.jks "$KEYSTORE_URL"
+              
               PACKAGE_TYPE="apk"
-              if [[ "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
+              if [[ "$BUILD_TYPE" == "release-aab" ]]; then
                 PACKAGE_TYPE="bundle"
               fi
-              printf "{ \"android\": { \"release\": { \"keystore\": \"release.jks\", \"storePassword\": \"<< pipeline.parameters.keystorePassword >>\", \"alias\": \"<< pipeline.parameters.keyAlias >>\", \"password\": \"<< pipeline.parameters.keyPassword >>\", \"packageType\": \"%s\" } } }" "$PACKAGE_TYPE" > build.json
+
+              # Menggunakan printf untuk menghindari masalah 'here-document'
+              printf '{ "android": { "release": { "keystore": "release.jks", "storePassword": "%s", "alias": "%s", "password": "%s", "packageType": "%s" } } }' \
+                "$KEYSTORE_PASSWORD" \
+                "$KEY_ALIAS" \
+                "$KEY_PASSWORD" \
+                "$PACKAGE_TYPE" \
+                > build.json
             fi
 
       - run:
@@ -130,14 +140,14 @@ jobs:
           command: |
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Memulai kompilasi Android (proses ini mungkin lama)..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
             {
-              echo "--- Adding Android Platform & Building ---";
-              cordova platform add android;
+              echo "--- Adding Android Platform & Building ---"
+              cordova platform add android
               if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
-                cordova build android --debug -- --gradleArg=--no-daemon;
+                cordova build android --debug -- --gradleArg=--no-daemon
               else
-                cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon;
-              fi;
-              echo "--- Cordova Build Finished ---";
+                cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
+              fi
+              echo "--- Cordova Build Finished ---"
             } > ../build_log.txt 2>&1
 
       - save_cache:
