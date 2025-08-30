@@ -103,20 +103,17 @@ jobs:
             - node-modules-v2-{{ checksum "cordova-project/package.json" }}
             - node-modules-v2-
 
-      - run:
-          name: "Prepare Signing Configuration (Release Only)"
-          working_directory: ~/project/cordova-project
+     - run:
+          name: "Prepare Signing Configuration"
           command: |
-            if [[ "$BUILD_TYPE" == "release-apk" || "$BUILD_TYPE" == "release-aab" ]]; then
-              curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Mempersiapkan konfigurasi rilis..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
-              curl -L -o release.jks "$KEYSTORE_URL"
+            if [[ "<< pipeline.parameters.buildType >>" == "release-apk" || "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
+              cd cordova-project
+              curl -L -o release.jks "<< pipeline.parameters.keystoreUrl >>"
               PACKAGE_TYPE="apk"
-              if [[ "$BUILD_TYPE" == "release-aab" ]]; then
+              if [[ "<< pipeline.parameters.buildType >>" == "release-aab" ]]; then
                 PACKAGE_TYPE="bundle"
               fi
-              cat > build.json \<< EOF
-{ "android": { "release": { "keystore": "release.jks", "storePassword": "$KEYSTORE_PASSWORD", "alias": "$KEY_ALIAS", "password": "$KEY_PASSWORD", "packageType": "$PACKAGE_TYPE" } } }
-EOF
+              printf "{ \"android\": { \"release\": { \"keystore\": \"release.jks\", \"storePassword\": \"<< pipeline.parameters.keystorePassword >>\", \"alias\": \"<< pipeline.parameters.keyAlias >>\", \"password\": \"<< pipeline.parameters.keyPassword >>\", \"packageType\": \"%s\" } } }" "$PACKAGE_TYPE" > build.json
             fi
 
       - run:
