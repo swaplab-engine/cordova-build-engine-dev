@@ -21,11 +21,10 @@ jobs:
       outcome: ${{ steps.final_check.outputs.outcome }}
 
     steps:
-      # ... (Step setup tidak diubah) ...
+      # ... (Semua step setup dari awal sampai sebelum build tidak diubah) ...
       - name: Record start time
         shell: bash
         run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
-
       - name: Report Build In Progress
         shell: bash
         run: |
@@ -38,18 +37,15 @@ jobs:
               "status": "in_progress"
             }' \
             "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-
       - name: Setup Java (Temurin)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-
       - name: Download and Unzip Project
         shell: bash
         run: |
@@ -61,8 +57,6 @@ jobs:
           unzip -q cordovaProject.zip -d cordova-project
           echo "Unzipped project -> listing top-level:"
           ls -la cordova-project | sed -n '1,200p'
-
-      # ... (Step caching tidak diubah) ...
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -100,11 +94,9 @@ jobs:
           key: android-sdk-${{ runner.os }}-api${{ env.ANDROID_API_LEVEL }}-bt${{ env.ANDROID_BUILD_TOOLS }}
           restore-keys: |
             android-sdk-${{ runner.os }}-
-
       - name: Install Cordova CLI (global)
         shell: bash
         run: npm install -g cordova
-
       - name: Ensure Android SDK root exists and cmdline-tools
         shell: bash
         run: |
@@ -125,11 +117,9 @@ jobs:
             cd -
             rm -rf "$tmpdir"
           fi
-
           export PATH="${SDK_ROOT}/cmdline-tools/latest/bin:${SDK_ROOT}/tools/bin:$PATH"
           yes | sdkmanager --sdk_root="${SDK_ROOT}" --licenses >/dev/null || true
           sdkmanager --sdk_root="${SDK_ROOT}" "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS}" || true
-
       - name: Ensure Gradle wrapper version is locked
         shell: bash
         run: |
@@ -146,27 +136,16 @@ jobs:
       - name: Install Dependencies and Build Project
         id: cordova_build_step
         shell: bash
+        # DIPERBAIKI: Baris `PATH` dihapus dari `env` untuk menghindari menimpa PATH sistem.
         env:
           ANDROID_HOME: $HOME/Android/Sdk
           ANDROID_SDK_ROOT: $HOME/Android/Sdk
-          PATH: $HOME/Android/Sdk/platform-tools:$PATH
         run: |
           set -e -o pipefail
+          # DIPERBAIKI: `PATH` sekarang ditambahkan dengan aman di dalam skrip.
+          export PATH="$HOME/Android/Sdk/platform-tools:$PATH"
           
-          # =======================================================
-          # == MULAI BLOK DEBUGGING LINGKUNGAN RUNNER
-          # =======================================================
-          echo "--- 🕵️‍♂️ Starting Environment Debugging ---"
-          echo "Current user: $(whoami)"
-          echo "--- Current PATH variable ---"
-          echo "$PATH" | tr ':' '\n'
-          echo "--- Checking for 'tee' command ---"
-          which tee || echo "'which tee' failed to find the command."
-          type -a tee || echo "'type -a tee' failed to find the command."
-          echo "--- Checking if '/usr/bin/tee' exists ---"
-          ls -l /usr/bin/tee || echo "File /usr/bin/tee does not exist."
-          echo "--- ✅ End of Environment Debugging ---"
-          # =======================================================
+          # Blok debugging tidak diperlukan lagi, tapi bisa ditambahkan kembali jika ada masalah lain.
 
           {
             cd cordova-project
