@@ -110,18 +110,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ steps.npm-global-path.outputs.path }}
-          key: npm-global-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('package-lock.json') }}
+          key: npm-global-${{ runner.os }}-node${{ env.NODE_VERSION }}-cordova-cli-v1 # <-- KUNCI DIPERBAIKI
 
       - name: Cache Android SDK components
         uses: actions/cache@v4
         with:
           path: |
-            $HOME/Android/Sdk/cmdline-tools
-            $HOME/Android/Sdk/platforms
-            $HOME/Android/Sdk/build-tools
-            $HOME/Android/Sdk/platform-tools
-            $HOME/Android/Sdk/extras
-            $HOME/.android
+            /usr/local/lib/android/sdk/cmdline-tools
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+            /usr/local/lib/android/sdk/platform-tools
+            /usr/local/lib/android/sdk/extras
+            ~/.android
           key: android-sdk-${{ runner.os }}-api${{ env.ANDROID_API_LEVEL }}-bt${{ env.ANDROID_BUILD_TOOLS }}
           restore-keys: |
             android-sdk-${{ runner.os }}-
@@ -133,35 +133,17 @@ jobs:
       - name: Install Cordova CLI (global)
         shell: bash
         run: npm install -g cordova
+
+      # --- BLOK LAMA DIGANTI DENGAN ACTION DI BAWAH ---
+      - name: Setup Android SDK
+        uses: reactivecircus/android-sdk-manager-action@v2
+        with:
+          packages: >
+            "platform-tools"
+            "platforms;android-${{ env.ANDROID_API_LEVEL }}"
+            "build-tools;${{ env.ANDROID_BUILD_TOOLS }}"
+            "cmdline-tools;latest"
         
-      - name: Ensure Android SDK root exists and cmdline-tools
-        shell: bash
-        run: |
-          set -e
-          SDK_ROOT="$HOME/Android/Sdk"
-          echo "Using SDK_ROOT=$SDK_ROOT"
-          mkdir -p "${SDK_ROOT}"
-          sudo chown -R $USER: "${SDK_ROOT}"
-          
-          if [ ! -d "${SDK_ROOT}/cmdline-tools/latest" ]; then
-            tmpdir=$(mktemp -d)
-            cd "$tmpdir"
-            echo "Downloading Android commandline tools..."
-            curl -sS -L "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o cmdline.zip
-            unzip -q cmdline.zip
-            mkdir -p "${SDK_ROOT}/cmdline-tools"
-            mv cmdline-tools "${SDK_ROOT}/cmdline-tools/latest" || true
-            cd -
-            rm -rf "$tmpdir"
-          else
-            echo "Android commandline tools found in cache."
-          fi
-          
-          export PATH="${SDK_ROOT}/cmdline-tools/latest/bin:${SDK_ROOT}/tools/bin:$PATH"
-          yes | sdkmanager --sdk_root="${SDK_ROOT}" --licenses >/dev/null || true
-          # sdkmanager akan memeriksa dan hanya mengunduh jika belum ada di cache
-          sdkmanager --sdk_root="${SDK_ROOT}" "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS}" || true
-          
       - name: Ensure Gradle wrapper version is locked
         shell: bash
         run: |
@@ -178,13 +160,9 @@ jobs:
       - name: Install Dependencies and Build Project
         id: cordova_build_step
         shell: bash
-        env:
-          ANDROID_HOME: $HOME/Android/Sdk
-          ANDROID_SDK_ROOT: $HOME/Android/Sdk
+        # ANDROID_HOME sudah di-set oleh action `android-sdk-manager-action`
         run: |
           set -e -o pipefail
-          export PATH="$HOME/Android/Sdk/platform-tools:$PATH"
-          
           {
             cd cordova-project
 
