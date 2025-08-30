@@ -5,14 +5,11 @@ on:
     types: [trigger-build]
 
 env:
-  # CATATAN: JDK 17 diperlukan untuk cordova-android@13+
   JAVA_VERSION: '17'
   GRADLE_VERSION: '8.2.0'
   NODE_VERSION: '20'
-  # CATATAN: API 35 adalah versi pratinjau (Android 15), mungkin kurang stabil.
-  # Pertimbangkan menggunakan '34' untuk versi stabil.
-  ANDROID_API_LEVEL: '35'
-  ANDROID_BUILD_TOOLS: '35.0.0'
+  ANDROID_API_LEVEL: '34'
+  ANDROID_BUILD_TOOLS: '34.0.0'
 
 jobs:
   build:
@@ -24,6 +21,7 @@ jobs:
       outcome: ${{ steps.final_check.outputs.outcome }}
 
     steps:
+      # ... (Semua step setup dari awal sampai sebelum build tidak diubah) ...
       - name: Record start time
         shell: bash
         run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
@@ -149,16 +147,15 @@ jobs:
 
       - name: Install Dependencies and Build Project
         id: cordova_build_step
-        shell: bash
+        # DIUBAH: Menggunakan `bash -c` dan `tee` untuk menampilkan log real-time
+        # `set -o pipefail` memastikan step gagal jika ada error di dalam pipeline
+        shell: bash -c "set -e -o pipefail; {0} 2>&1 | tee ../build_log.txt"
         env:
           ANDROID_HOME: $HOME/Android/Sdk
           ANDROID_SDK_ROOT: $HOME/Android/Sdk
           PATH: $HOME/Android/Sdk/platform-tools:$PATH
         run: |
-          set -e
-          # Redirect semua output ke top-level build_log.txt (upload saat gagal)
-          exec &> ../build_log.txt
-
+          # Perintah `exec` yang menyembunyikan log telah dihapus
           cd cordova-project
 
           echo "--- Node dependencies ---"
@@ -169,9 +166,7 @@ jobs:
           fi
 
           echo "--- Ensure Android platform present ---"
-          # Menghapus dan menambah platform untuk memastikan file sesuai
           cordova platform rm android || true
-          # Menggunakan versi spesifik sesuai permintaan
           cordova platform add android --no-fetch
 
           echo "--- Gradle settings ---"
@@ -205,14 +200,8 @@ jobs:
           fi
           echo "--- Cordova Build Finished ---"
 
-      # PENTING: Step ini akan menampilkan log error jika step di atas gagal
-      - name: Display Build Log on Failure
-        if: failure()
-        shell: bash
-        run: |
-          echo "--- Build failed. Displaying contents of build_log.txt ---"
-          cat build_log.txt
-          
+      # Step `Display Build Log on Failure` tidak lagi diperlukan karena log sudah tampil langsung
+
       - name: Setup SSH for SCP
         if: success()
         uses: webfactory/ssh-agent@v0.9.0
@@ -223,6 +212,7 @@ jobs:
         if: success()
         shell: bash
         run: |
+          # ... (tidak diubah)
           USER_ID="${{ github.event.client_payload.userId }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
@@ -255,6 +245,7 @@ jobs:
         if: failure()
         shell: bash
         run: |
+          # ... (tidak diubah, akan tetap berfungsi karena build_log.txt masih dibuat oleh `tee`)
           INTERNAL_API_URL="${{ github.event.client_payload.internalApiUrl }}"
           if [ -z "$INTERNAL_API_URL" ]; then
               echo "::error::Fatal: internalApiUrl not received in payload. Cannot report failure."
