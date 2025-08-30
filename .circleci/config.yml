@@ -55,9 +55,6 @@ jobs:
       KEY_PASSWORD: << pipeline.parameters.keyPassword >>
 
     steps:
-      # ===================================================================
-      # 1. PERSIAPAN DAN LAPORAN STATUS AWAL
-      # ===================================================================
       - run:
           name: "Report Build In Progress & Start Time"
           command: |
@@ -68,10 +65,7 @@ jobs:
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" \
               -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "in_progress", "ciProvider": "circleci"}' \
               "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
-
-      # ===================================================================
-      # 2. SETUP LINGKUNGAN BUILD
-      # ===================================================================
+      
       - run:
           name: "Report Environment Setup"
           command: |
@@ -79,9 +73,6 @@ jobs:
               -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Mempersiapkan lingkungan (Node.js & Java)..."}' \
               "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
 
-      # ===================================================================
-      # 3. PROSES CACHING UNTUK PERCEPATAN
-      # ===================================================================
       - run:
           name: "Report Cache Check"
           command: |
@@ -96,9 +87,6 @@ jobs:
           keys:
             - cordova-cli-v1-{{ .Environment.CIRCLE_JOB }}
 
-      # ===================================================================
-      # 4. PERSIAPAN PROYEK CORDOVA
-      # ===================================================================
       - run:
           name: "Install Cordova CLI"
           command: |
@@ -148,9 +136,6 @@ jobs:
               EOF
             fi
 
-      # ===================================================================
-      # 5. PROSES BUILD UTAMA
-      # ===================================================================
       - restore_cache:
           name: Restore Gradle cache
           keys:
@@ -188,10 +173,7 @@ jobs:
               fi
               echo "--- Cordova Build Finished ---"
             } > ../build_log.txt 2>&1
-
-      # ===================================================================
-      # 6. PENYIMPANAN CACHE
-      # ===================================================================
+      
       - save_cache:
           key: npm-global-cache-v4-{{ .Environment.CIRCLE_JOB }}
           paths:
@@ -208,10 +190,7 @@ jobs:
           key: gradle-cache-v1-{{ checksum "package-lock.json" }}
           paths:
             - /home/circleci/.gradle
-
-      # ===================================================================
-      # 7. PENYELESAIAN DAN PELAPORAN HASIL
-      # ===================================================================
+      
       - run:
           name: "Finalizing and Uploading Artifact"
           command: |
