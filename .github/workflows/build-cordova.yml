@@ -39,43 +39,17 @@ jobs:
             }' \
             "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
 
-      - name: Setup Node.js (no global npm cache)
+      - name: Setup Node.js (no repo-level npm cache)
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Setup Java (Temurin) & enable gradle cache
+      - name: Setup Java (Temurin) — no gradle cache here
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-          cache: gradle
-
-      - name: Cache Gradle (wrapper & caches)
-        uses: actions/cache@v4
-        id: gradle-cache
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-v${{ env.GRADLE_VERSION }}-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-v${{ env.GRADLE_VERSION }}-
-            gradle-${{ runner.os }}-
-
-      - name: Cache Android SDK components
-        uses: actions/cache@v4
-        id: android-sdk-cache
-        with:
-          path: |
-            ${{ env.ANDROID_SDK_ROOT }}/platforms
-            ${{ env.ANDROID_SDK_ROOT }}/build-tools
-            ${{ env.ANDROID_SDK_ROOT }}/platform-tools
-            ${{ env.ANDROID_SDK_ROOT }}/extras
-            ~/.android
-          key: android-sdk-${{ runner.os }}-api${{ env.ANDROID_API_LEVEL }}-bt${{ env.ANDROID_BUILD_TOOLS }}
-          restore-keys: |
-            android-sdk-${{ runner.os }}-
+          # IMPORTANT: do NOT set cache: gradle here (project not yet downloaded)
 
       - name: Download and Unzip Project
         shell: bash
@@ -86,6 +60,21 @@ jobs:
           mkdir -p cordova-project
           curl -L -f -o cordovaProject.zip "$ZIP_URL"
           unzip -q cordovaProject.zip -d cordova-project
+
+      # Now project files exist → safe to run caches that rely on project files
+      - name: Cache Gradle (wrapper & caches) — after project unzip
+        uses: actions/cache@v4
+        id: gradle-cache
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            cordova-project/.gradle
+          # hashFiles points to patterns inside cordova-project now
+          key: gradle-${{ runner.os }}-v${{ env.GRADLE_VERSION }}-${{ hashFiles('cordova-project/**/gradle-wrapper.properties','cordova-project/**/*.gradle*') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-v${{ env.GRADLE_VERSION }}-
+            gradle-${{ runner.os }}-
 
       - name: Cache project node_modules (inside cordova-project)
         uses: actions/cache@v4
@@ -257,7 +246,7 @@ jobs:
           end_time=$(date +%s)
           duration=$((end_time - start_time))
 
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'","status": "failed", "durationSeconds": "'"$duration"'", "logFile": "'"$LOG_FILENAME"'","logSnippet": "'"$ESCAPED_LOG_SNIPPET"'"}' "$INTERNAL_API_URL/api/github-webhook"
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.SSH_PRIVATE_KEY }}" -d '{"buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'","status": "failed", "durationSeconds": "'"$duration"'", "logFile": "'"$LOG_FILENAME"'","logSnippet": "'"$ESCAPED_LOG_SNIPPET"'"}' "$INTERNAL_API_URL/api/github-webhook"
 
       - name: Final check
         id: final_check
