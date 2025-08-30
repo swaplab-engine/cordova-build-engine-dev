@@ -8,6 +8,7 @@ env:
   JAVA_VERSION: '17'
   GRADLE_VERSION: '8.2.0'
   NODE_VERSION: '20'
+  # DIKEMBALIKAN: Sesuai permintaan, target API diatur ke 35
   ANDROID_API_LEVEL: '35'
   ANDROID_BUILD_TOOLS: '35.0.0'
 
@@ -147,61 +148,61 @@ jobs:
 
       - name: Install Dependencies and Build Project
         id: cordova_build_step
-        # DIUBAH: Menggunakan `bash -c` dan `tee` untuk menampilkan log real-time
-        # `set -o pipefail` memastikan step gagal jika ada error di dalam pipeline
-        shell: bash -c "set -e -o pipefail; {0} 2>&1 | tee ../build_log.txt"
+        # DIPERBAIKI: Menggunakan shell standar dan memindahkan logika `tee` ke dalam `run`
+        shell: bash
         env:
           ANDROID_HOME: $HOME/Android/Sdk
           ANDROID_SDK_ROOT: $HOME/Android/Sdk
           PATH: $HOME/Android/Sdk/platform-tools:$PATH
         run: |
-          # Perintah `exec` yang menyembunyikan log telah dihapus
-          cd cordova-project
+          set -e -o pipefail
+          {
+            cd cordova-project
 
-          echo "--- Node dependencies ---"
-          if [ -f package-lock.json ]; then
-            npm ci --prefer-offline --no-audit --progress=false
-          else
-            npm install --prefer-offline --no-audit --progress=false
-          fi
-
-          echo "--- Ensure Android platform present ---"
-          cordova platform rm android || true
-          cordova platform add android --no-fetch
-
-          echo "--- Gradle settings ---"
-          export GRADLE_OPTS="-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx1536m"
-
-          echo "--- Starting Cordova Build ---"
-          if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
-            cordova build android --debug -- --gradleArg=--no-daemon --gradleArg=-Pandroid.useAndroidX=true
-          else
-            echo "--- Downloading Keystore for Release Build ---"
-            KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
-            if [ -z "$KEYSTORE_URL" ]; then
-              echo "::error::Missing keystore URL for release build"
-              exit 2
-            fi
-            curl -L -f -o release.jks "$KEYSTORE_URL"
-
-            PACKAGE_TYPE_FLAG=""
-            if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
-              PACKAGE_TYPE_FLAG="--packageType=bundle"
+            echo "--- Node dependencies ---"
+            if [ -f package-lock.json ]; then
+              npm ci --prefer-offline --no-audit --progress=false
+            else
+              npm install --prefer-offline --no-audit --progress=false
             fi
 
-            echo "--- Running release build (signed) ---"
-            cordova build android --release -- --gradleArg=--no-daemon \
-              --keystore="release.jks" \
-              --alias="${{ github.event.client_payload.keyAlias }}" \
-              --storePassword="${{ github.event.client_payload.keystorePassword }}" \
-              --password="${{ github.event.client_payload.keyPassword }}" \
-              --gradleArg=-Pandroid.useAndroidX=true \
-              $PACKAGE_TYPE_FLAG
-          fi
-          echo "--- Cordova Build Finished ---"
+            echo "--- Ensure Android platform present ---"
+            cordova platform rm android || true
+            cordova platform add android --no-fetch
 
-      # Step `Display Build Log on Failure` tidak lagi diperlukan karena log sudah tampil langsung
+            echo "--- Gradle settings ---"
+            export GRADLE_OPTS="-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx1536m"
 
+            echo "--- Starting Cordova Build ---"
+            if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
+              cordova build android --debug -- --gradleArg=--no-daemon --gradleArg=-Pandroid.useAndroidX=true
+            else
+              echo "--- Downloading Keystore for Release Build ---"
+              KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
+              if [ -z "$KEYSTORE_URL" ]; then
+                echo "::error::Missing keystore URL for release build"
+                exit 2
+              fi
+              curl -L -f -o release.jks "$KEYSTORE_URL"
+
+              PACKAGE_TYPE_FLAG=""
+              if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
+                PACKAGE_TYPE_FLAG="--packageType=bundle"
+              fi
+
+              echo "--- Running release build (signed) ---"
+              cordova build android --release -- --gradleArg=--no-daemon \
+                --keystore="release.jks" \
+                --alias="${{ github.event.client_payload.keyAlias }}" \
+                --storePassword="${{ github.event.client_payload.keystorePassword }}" \
+                --password="${{ github.event.client_payload.keyPassword }}" \
+                --gradleArg=-Pandroid.useAndroidX=true \
+                $PACKAGE_TYPE_FLAG
+            fi
+            echo "--- Cordova Build Finished ---"
+          } 2>&1 | tee ../build_log.txt
+
+      # ... (Sisa workflow tidak diubah) ...
       - name: Setup SSH for SCP
         if: success()
         uses: webfactory/ssh-agent@v0.9.0
@@ -212,7 +213,6 @@ jobs:
         if: success()
         shell: bash
         run: |
-          # ... (tidak diubah)
           USER_ID="${{ github.event.client_payload.userId }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
@@ -245,7 +245,6 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          # ... (tidak diubah, akan tetap berfungsi karena build_log.txt masih dibuat oleh `tee`)
           INTERNAL_API_URL="${{ github.event.client_payload.internalApiUrl }}"
           if [ -z "$INTERNAL_API_URL" ]; then
               echo "::error::Fatal: internalApiUrl not received in payload. Cannot report failure."
