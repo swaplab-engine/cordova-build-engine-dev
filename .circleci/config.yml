@@ -40,7 +40,6 @@ jobs:
     docker:
       - image: cimg/android:2024.11.1-node
     
-    # KEMBALI ke working_directory asli Anda yang berfungsi
     working_directory: ~/project
 
     environment:
@@ -94,21 +93,19 @@ jobs:
           name: "Download and Unzip Project"
           command: |
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Mengunduh dan mengekstrak proyek..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
-            # Menggunakan logika unzip asli Anda
             mkdir -p cordova-project
             curl -L -o cordovaProject.zip "$PROJECT_URL"
             unzip -o cordovaProject.zip -d cordova-project
 
+      # --- PERBAIKAN DI SINI: Kembali menggunakan package.json ---
       - restore_cache:
           name: Restore project dependencies cache
           keys:
-            # Menggunakan path yang benar: folder/file dan package-lock.json
-            - node-modules-v2-{{ checksum "cordova-project/package-lock.json" }}
+            - node-modules-v2-{{ checksum "cordova-project/package.json" }}
             - node-modules-v2-
 
       - run:
           name: "Prepare Signing Configuration (Release Only)"
-          # Menambahkan working_directory agar tidak perlu cd berulang kali
           working_directory: ~/project/cordova-project
           command: |
             if [[ "$BUILD_TYPE" == "release-apk" || "$BUILD_TYPE" == "release-aab" ]]; then
@@ -128,11 +125,8 @@ jobs:
           working_directory: ~/project/cordova-project
           command: |
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Menginstal dependensi proyek (npm install)..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
-            if [ -f "package-lock.json" ]; then
-              npm ci > ../npm_install_log.txt 2>&1
-            else
-              npm install > ../npm_install_log.txt 2>&1
-            fi
+            # npm install akan membuat package-lock.json jika belum ada
+            npm install > ../npm_install_log.txt 2>&1
 
       - run:
           name: "Build Android Project"
@@ -151,12 +145,13 @@ jobs:
               echo "--- Cordova Build Finished ---"
             } > ../build_log.txt 2>&1
 
+      # --- PERBAIKAN DI SINI: Kembali menggunakan package.json untuk menyimpan cache ---
       - save_cache:
-          key: node-modules-v2-{{ checksum "cordova-project/package-lock.json" }}
+          key: node-modules-v2-{{ checksum "cordova-project/package.json" }}
           paths:
             - cordova-project/node_modules
       - save_cache:
-          key: gradle-cache-v2-{{ checksum "cordova-project/package-lock.json" }}
+          key: gradle-cache-v2-{{ checksum "cordova-project/package.json" }}
           paths:
             - /home/circleci/.gradle
 
