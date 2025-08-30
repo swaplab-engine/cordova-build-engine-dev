@@ -42,28 +42,19 @@ jobs:
       # ===================================================================
       # 3. PROSES CACHING UNTUK PERCEPATAN
       # ===================================================================
-      - name: Cache All Dependencies
+      - name: Restore All Caches
+        id: cache-all
         uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-global-cache-v4
-      - uses: actions/cache@v4
-        with:
-          path: /opt/hostedtoolcache/node/20.*.*/lib/node_modules/cordova
-          key: ${{ runner.os }}-cordova-cli-v1
-      - uses: actions/cache@v4
-        with:
-          path: cordova-project/node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('cordova-project/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-modules-
-      - uses: actions/cache@v4
-        with:
           path: |
+            ~/.npm
+            /opt/hostedtoolcache/node/20.*.*/lib/node_modules/cordova
+            cordova-project/node_modules
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/gradle*') }}
-          restore-keys: ${{ runner.os }}-gradle-
+          key: ${{ runner.os }}-build-cache-${{ hashFiles('**/package-lock.json', '**/gradle*') }}
+          restore-keys: |
+            ${{ runner.os }}-build-cache-
 
       # ===================================================================
       # 4. PERSIAPAN PROYEK DAN BUILD
@@ -78,7 +69,11 @@ jobs:
 
           send_log "Mempersiapkan lingkungan build..."
           
-          if [ ! -d "/opt/hostedtoolcache/node/20.*.*/lib/node_modules/cordova" ]; then npm install -g cordova; else echo "Cordova CLI dipulihkan dari cache."; fi
+          if [ ! -d "/opt/hostedtoolcache/node/20.*.*/lib/node_modules/cordova" ]; then
+            npm install -g cordova
+          else
+            echo "Cordova CLI dipulihkan dari cache."
+          fi
           echo "/opt/hostedtoolcache/node/20.*.*/bin" >> $GITHUB_PATH
           
           send_log "Mengunduh dan mengekstrak proyek..."
@@ -91,9 +86,12 @@ jobs:
             curl -L -o release.jks "${{ github.event.client_payload.keystoreUrl }}"
             PACKAGE_TYPE="apk"
             if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then PACKAGE_TYPE="bundle"; fi
+            
+            # --- BLOK YANG DIPERBAIKI ---
             cat > build.json << EOF
             { "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } } }
-            EOF
+EOF
+            # --- AKHIR BLOK YANG DIPERBAIKI ---
           fi
 
           send_log "Menginstal dependensi proyek (npm install)..."
@@ -140,6 +138,7 @@ jobs:
         if: failure() || cancelled()
         shell: bash
         run: |
+          # ... (Langkah ini tetap sama) ...
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
@@ -152,10 +151,7 @@ jobs:
           if [[ "$HTTP_CODE" == "200" ]]; then LOG_URL="${APP_BASE_URL}/logs/github/${USER_ID}/${LOG_URL_FILENAME}"; fi
           end_time=$(date +%s)
           duration=$((end_time - start_time))
-          
-          # MODIFIKASI: Tambahkan `sed` untuk memfilter path sensitif sebelum membuat snippet
           LOG_SNIPPET=$(tail -n 20 final_log.txt | sed 's|/home/runner/work/[^ ]*|...|g' | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
-          
           curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d "{\"buildId\": \"$BUILD_ID\", \"userId\": \"$USER_ID\", \"status\": \"failed\", \"durationSeconds\": \"$duration\", \"logUrl\": \"$LOG_URL\", \"logSnippet\": \"$LOG_SNIPPET\", \"ciProvider\": \"github\"}" "$APP_BASE_URL/api/github-webhook"
 
       - name: Final check
