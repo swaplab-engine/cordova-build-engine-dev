@@ -10,7 +10,6 @@ env:
   NODE_VERSION: '20'
   ANDROID_API_LEVEL: '35'
   ANDROID_BUILD_TOOLS: '35.0.0'
-  # Tentukan satu path SDK yang konsisten untuk semua langkah
   ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
 
 jobs:
@@ -28,7 +27,6 @@ jobs:
         run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
         
       - name: Report Build In Progress
-        # ... (tidak ada perubahan di sini) ...
         shell: bash
         run: |
           curl --fail -X POST \
@@ -39,7 +37,7 @@ jobs:
               "userId": "${{ github.event.client_payload.userId }}",
               "status": "in_progress"
             }' \
-            "${{ github.event.client_payload.internalApi_url }}/api/github-webhook"
+            "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
             
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -53,7 +51,6 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           
       - name: Download and Unzip Project
-        # ... (tidak ada perubahan di sini) ...
         shell: bash
         run: |
           set -e
@@ -66,7 +63,7 @@ jobs:
           ls -la cordova-project | sed -n '1,200p'
 
       # ===============================================
-      # BLOK CACHING YANG DISEMPURNAKAN
+      # BLOK CACHING
       # ===============================================
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -115,7 +112,6 @@ jobs:
           path: ${{ steps.npm-global-path.outputs.path }}
           key: npm-global-${{ runner.os }}-node${{ env.NODE_VERSION }}-cordova-cli-v1
 
-      # --- Cache Seluruh Direktori Android SDK ---
       - name: Cache Android SDK
         uses: actions/cache@v4
         with:
@@ -132,32 +128,25 @@ jobs:
         shell: bash
         run: npm install -g cordova
 
-      # --- [STRATEGI BARU] Setup SDK Minimalis dan Cepat ---
       - name: Setup Android SDK (Minimal)
         shell: bash
         run: |
           set -e
-          # Definisikan paket yang WAJIB ada, tidak lebih.
           PACKAGES="platforms;android-${{ env.ANDROID_API_LEVEL }} build-tools;${{ env.ANDROID_BUILD_TOOLS }} platform-tools cmdline-tools;latest"
           
-          # 1. Cek apakah sdkmanager ada (dari cache). Jika tidak, unduh cmdline-tools.
           if [ ! -f "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]; then
             echo "SDK manager not found in cache. Downloading command-line tools..."
-            # Unduh versi spesifik untuk stabilitas
             curl -sS -L "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o cmdline-tools.zip
             mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
             unzip -q cmdline-tools.zip -d "${ANDROID_SDK_ROOT}/cmdline-tools"
-            # Pindahkan ke sub-folder 'latest' sesuai standar SDK
             mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
             rm cmdline-tools.zip
           else
             echo "SDK manager found in cache. Skipping download."
           fi
 
-          # 2. Tambahkan sdkmanager ke PATH
           export PATH="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools:$PATH"
           
-          # 3. Terima semua lisensi & instal paket yang dibutuhkan dalam satu perintah
           echo "y" | sdkmanager --licenses > /dev/null
           echo "y" | sdkmanager ${PACKAGES} > /dev/null
           
@@ -180,7 +169,6 @@ jobs:
         id: cordova_build_step
         shell: bash
         env:
-          # Pastikan variabel ini di-set untuk Cordova
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
         run: |
           set -e -o pipefail
@@ -230,7 +218,7 @@ jobs:
             echo "--- Cordova Build Finished ---"
           } 2>&1 | tee ../build_log.txt
       
-      # ... Sisa workflow tidak berubah, hanya perlu penyesuaian kecil ...
+      # ... Sisa workflow tidak berubah ...
       - name: Setup SSH for SCP
         if: success()
         uses: webfactory/ssh-agent@v0.9.0
@@ -239,7 +227,6 @@ jobs:
           
       - name: Upload Build File via SCP and Report Success
         if: success()
-        # ... (tidak ada perubahan di sini) ...
         shell: bash
         run: |
           USER_ID="${{ github.event.client_payload.userId }}"
@@ -272,7 +259,6 @@ jobs:
             
       - name: Upload Log File and Report Failure
         if: failure()
-        # ... (tidak ada perubahan di sini) ...
         shell: bash
         run: |
           INTERNAL_API_URL="${{ github.event.client_payload.internalApiUrl }}"
