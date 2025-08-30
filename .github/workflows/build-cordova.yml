@@ -8,7 +8,6 @@ env:
   JAVA_VERSION: '17'
   GRADLE_VERSION: '8.2.0'
   NODE_VERSION: '20'
-  ANDROID_SDK_ROOT: $HOME/Android/Sdk
   ANDROID_API_LEVEL: '35'
   ANDROID_BUILD_TOOLS: '35.0.0'
 
@@ -49,8 +48,8 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-          # IMPORTANT: do NOT set cache: gradle here (project not yet downloaded)
 
+      # ---------------- Download project first ----------------
       - name: Download and Unzip Project
         shell: bash
         run: |
@@ -60,8 +59,11 @@ jobs:
           mkdir -p cordova-project
           curl -L -f -o cordovaProject.zip "$ZIP_URL"
           unzip -q cordovaProject.zip -d cordova-project
+          # show a quick summary for debugging
+          echo "Unzipped project -> listing top-level:"
+          ls -la cordova-project | sed -n '1,200p'
 
-      # Now project files exist → safe to run caches that rely on project files
+      # ---------- Now caches that depend on project files ----------
       - name: Cache Gradle (wrapper & caches) — after project unzip
         uses: actions/cache@v4
         id: gradle-cache
@@ -70,8 +72,7 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
             cordova-project/.gradle
-          # hashFiles points to patterns inside cordova-project now
-          key: gradle-${{ runner.os }}-v${{ env.GRADLE_VERSION }}-${{ hashFiles('cordova-project/**/gradle-wrapper.properties','cordova-project/**/*.gradle*') }}
+          key: gradle-${{ runner.os }}-v${{ env.GRADLE_VERSION }}-${{ hashFiles('cordova-project/**/gradle-wrapper.properties', 'cordova-project/**/*.gradle*') }}
           restore-keys: |
             gradle-${{ runner.os }}-v${{ env.GRADLE_VERSION }}-
             gradle-${{ runner.os }}-
@@ -88,10 +89,24 @@ jobs:
       - name: Cache npm local cache
         uses: actions/cache@v4
         with:
-          path: ~/.npm
+          path: $HOME/.npm
           key: npm-cache-${{ runner.os }}-${{ hashFiles('cordova-project/**/package-lock.json') }}
           restore-keys: |
             npm-cache-${{ runner.os }}-
+
+      - name: Cache Android SDK components
+        uses: actions/cache@v4
+        id: android-sdk-cache
+        with:
+          path: |
+            $HOME/Android/Sdk/platforms
+            $HOME/Android/Sdk/build-tools
+            $HOME/Android/Sdk/platform-tools
+            $HOME/Android/Sdk/extras
+            $HOME/.android
+          key: android-sdk-${{ runner.os }}-api${{ env.ANDROID_API_LEVEL }}-bt${{ env.ANDROID_BUILD_TOOLS }}
+          restore-keys: |
+            android-sdk-${{ runner.os }}-
 
       - name: Install Cordova CLI (global)
         shell: bash
@@ -101,18 +116,26 @@ jobs:
         shell: bash
         run: |
           set -e
-          mkdir -p "${ANDROID_SDK_ROOT}"
-          sudo chown -R $USER: "${ANDROID_SDK_ROOT}"
-          if [ ! -d "${ANDROID_SDK_ROOT}/cmdline-tools/latest" ]; then
-            mkdir -p /tmp/cmdline
-            cd /tmp/cmdline
+          SDK_ROOT="$HOME/Android/Sdk"
+          echo "Using SDK_ROOT=$SDK_ROOT"
+          mkdir -p "${SDK_ROOT}"
+          sudo chown -R $USER: "${SDK_ROOT}"
+
+          if [ ! -d "${SDK_ROOT}/cmdline-tools/latest" ]; then
+            tmpdir=$(mktemp -d)
+            cd "$tmpdir"
+            echo "Downloading Android commandline tools..."
             curl -sS -L "https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip" -o cmdline.zip
-            unzip -q cmdline.zip -d "${ANDROID_SDK_ROOT}/cmdline-tools"
-            mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest" || true
+            unzip -q cmdline.zip -d cmdline-tools
+            mkdir -p "${SDK_ROOT}/cmdline-tools"
+            mv cmdline-tools/cmdline-tools "${SDK_ROOT}/cmdline-tools/latest" || true
+            cd -
+            rm -rf "$tmpdir"
           fi
-          export PATH="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/tools/bin:$PATH"
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || true
-          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS}" || true
+
+          export PATH="${SDK_ROOT}/cmdline-tools/latest/bin:${SDK_ROOT}/tools/bin:$PATH"
+          yes | sdkmanager --sdk_root="${SDK_ROOT}" --licenses >/dev/null || true
+          sdkmanager --sdk_root="${SDK_ROOT}" "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS}" || true
 
       - name: Ensure Gradle wrapper version is locked to 8.2.0 (if gradlew present)
         shell: bash
@@ -131,11 +154,12 @@ jobs:
         id: cordova_build_step
         shell: bash
         env:
-          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
-          PATH: ${{ env.ANDROID_SDK_ROOT }}/platform-tools:$PATH
+          ANDROID_HOME: $HOME/Android/Sdk
+          ANDROID_SDK_ROOT: $HOME/Android/Sdk
+          PATH: $HOME/Android/Sdk/platform-tools:$PATH
         run: |
           set -e
+          # redirect semua output ke top-level build_log.txt (upload saat gagal)
           exec &> ../build_log.txt
 
           cd cordova-project
@@ -148,6 +172,7 @@ jobs:
           fi
 
           echo "--- Ensure Android platform present ---"
+          # remove/add to ensure platform files match wrapper and build expectations
           cordova platform rm android || true
           cordova platform add android@latest --no-fetch
 
@@ -246,7 +271,7 @@ jobs:
           end_time=$(date +%s)
           duration=$((end_time - start_time))
 
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.SSH_PRIVATE_KEY }}" -d '{"buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'","status": "failed", "durationSeconds": "'"$duration"'", "logFile": "'"$LOG_FILENAME"'","logSnippet": "'"$ESCAPED_LOG_SNIPPET"'"}' "$INTERNAL_API_URL/api/github-webhook"
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'","status": "failed", "durationSeconds": "'"$duration"'", "logFile": "'"$LOG_FILENAME"'","logSnippet": "'"$ESCAPED_LOG_SNIPPET"'"}' "$INTERNAL_API_URL/api/github-webhook"
 
       - name: Final check
         id: final_check
