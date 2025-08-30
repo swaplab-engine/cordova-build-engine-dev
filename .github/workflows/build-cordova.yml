@@ -21,49 +21,14 @@ jobs:
       # ===================================================================
       # 1. PERSIAPAN DAN LAPORAN STATUS AWAL
       # ===================================================================
-      - name: Define log reporting function
-        shell: bash
-        run: |
-          # Fungsi ini akan kita gunakan untuk mengirim update status ke server
-          send_log() {
-            MESSAGE="$1"
-            echo "LOG: $MESSAGE"
-            # JSON di-escape agar aman di dalam shell script
-            JSON_PAYLOAD=$(printf '{"buildId": "%s", "userId": "%s", "status": "log_update", "message": "%s"}' \
-              "${{ github.event.client_payload.buildId }}" \
-              "${{ github.event.client_payload.userId }}" \
-              "$MESSAGE")
-
-            curl --fail -X POST \
-              -H "Content-Type: application/json" \
-              -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
-              -d "$JSON_PAYLOAD" \
-              "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
-          }
-          # Simpan fungsi ke environment agar bisa dipakai di langkah selanjutnya
-          declare -f send_log >> $GITHUB_ENV
-
       - name: Report Build In Progress
         shell: bash
         run: |
-          # Muat fungsi send_log dari environment
-          source $GITHUB_ENV
+          # Kirim log pertama kali bahwa proses dimulai
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Memulai proses build..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
           
-          # Kirim log pertama kali
-          send_log "Memulai proses build..."
-          
-          # Kirim status 'in_progress' untuk memulai timer di UI dan melacak run_id
-          curl --fail -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
-            -d '{
-              "buildId": "${{ github.event.client_payload.buildId }}",
-              "userId": "${{ github.event.client_payload.userId }}",
-              "status": "in_progress",
-              "ciProvider": "github",
-              "runId": "${{ github.run_id }}"
-            }' \
-            "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
+          # Kirim status 'in_progress' untuk memulai timer di UI dan melacak run_id untuk fungsi cancel
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "in_progress", "ciProvider": "github", "runId": "${{ github.run_id }}"}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
 
       # ===================================================================
       # 2. SETUP LINGKUNGAN BUILD
@@ -71,8 +36,8 @@ jobs:
       - name: Set up Build Environment
         shell: bash
         run: |
-          source $GITHUB_ENV
-          send_log "Mempersiapkan lingkungan (Node.js & Java)..."
+          # Kirim log update
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Mempersiapkan lingkungan (Node.js & Java)..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -87,15 +52,12 @@ jobs:
       - name: Check and Restore Cache
         shell: bash
         run: |
-          source $GITHUB_ENV
-          send_log "Memeriksa cache untuk percepatan build..."
-      - name: Cache global npm packages
-        uses: actions/cache@v4
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Memeriksa cache untuk percepatan build..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
+      - uses: actions/cache@v4
         with:
           path: ~/.npm
           key: ${{ runner.os }}-npm-global-cache-v4
-      - name: Cache Cordova CLI installation
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: /opt/hostedtoolcache/node/20.*.*/lib/node_modules/cordova
           key: ${{ runner.os }}-cordova-cli-v1
@@ -106,8 +68,7 @@ jobs:
       - name: Install Cordova CLI
         shell: bash
         run: |
-          source $GITHUB_ENV
-          send_log "Menginstal Cordova CLI..."
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Menginstal Cordova CLI..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
           if [ ! -d "/opt/hostedtoolcache/node/20.*.*/lib/node_modules/cordova" ]; then
             npm install -g cordova
           else
@@ -118,14 +79,13 @@ jobs:
       - name: Download and Unzip Project
         shell: bash
         run: |
-          source $GITHUB_ENV
-          send_log "Mengunduh dan mengekstrak proyek..."
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Mengunduh dan mengekstrak proyek..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
           curl -L -o cordovaProject.zip "${{ github.event.client_payload.projectUrl }}"
           mkdir cordova-project
           unzip cordovaProject.zip -d cordova-project
 
-      - name: Cache project dependencies (node_modules)
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
+        name: Cache project dependencies (node_modules)
         with:
           path: cordova-project/node_modules
           key: ${{ runner.os }}-node-modules-${{ hashFiles('cordova-project/package-lock.json') }}
@@ -136,8 +96,7 @@ jobs:
         if: ${{ startsWith(github.event.client_payload.buildType, 'release') }}
         shell: bash
         run: |
-          source $GITHUB_ENV
-          send_log "Mempersiapkan konfigurasi rilis..."
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Mempersiapkan konfigurasi rilis..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
           cd cordova-project
           curl -L -o release.jks "${{ github.event.client_payload.keystoreUrl }}"
           PACKAGE_TYPE="apk"
@@ -151,8 +110,8 @@ jobs:
       # ===================================================================
       # 5. PROSES BUILD UTAMA
       # ===================================================================
-      - name: Cache Gradle packages
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
+        name: Cache Gradle packages
         with:
           path: |
             ~/.gradle/caches
@@ -164,11 +123,8 @@ jobs:
         id: cordova_build_step
         shell: bash
         run: |
-          source $GITHUB_ENV
-          send_log "Menginstal dependensi proyek (npm install)..."
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Menginstal dependensi proyek (npm install)..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
           
-          # Redirect output ke file log agar UI tidak menunggu.
-          # Pesan error akan tetap muncul di log GitHub Actions jika npm ci/install gagal.
           cd cordova-project
           if [ -f "package-lock.json" ]; then
             npm ci > ../npm_install_log.txt 2>&1
@@ -176,9 +132,8 @@ jobs:
             npm install > ../npm_install_log.txt 2>&1
           fi
 
-          send_log "Memulai kompilasi Android (proses ini mungkin lama)..."
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Memulai kompilasi Android (proses ini mungkin lama)..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
           
-          # Gabungkan semua output build ke satu file log
           {
             echo "--- Adding Android Platform & Building ---"
             cordova platform add android
@@ -196,14 +151,13 @@ jobs:
       - name: Finalizing and Uploading Artifact
         shell: bash
         run: |
-          source $GITHUB_ENV
-          send_log "Menyelesaikan dan mengemas hasil build..."
+          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "${{ github.event.client_payload.buildId }}", "userId": "${{ github.event.client_payload.userId }}", "status": "log_update", "message": "Menyelesaikan dan mengemas hasil build..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook"
 
       - name: Upload Build File and Report Success
         if: success()
         shell: bash
         run: |
-          # ... (Tidak ada perubahan di langkah ini) ...
+          # ... (Langkah ini tetap sama, tidak ada perubahan) ...
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
@@ -228,11 +182,10 @@ jobs:
         if: failure() || cancelled()
         shell: bash
         run: |
-          # ... (Tidak ada perubahan di langkah ini) ...
+          # ... (Langkah ini tetap sama, tidak ada perubahan) ...
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
-          # Gabungkan semua log yang mungkin ada
           cat npm_install_log.txt build_log.txt > final_log.txt 2>/dev/null || cat build_log.txt > final_log.txt 2>/dev/null || echo "Build gagal pada tahap awal." > final_log.txt
           LOG_FILE_NAME="${BUILD_ID}.log"
           UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -F "logFile=@final_log.txt;filename=${LOG_FILE_NAME}" -F "buildId=$BUILD_ID" -F "ci_provider=github" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" "$APP_BASE_URL/upload-log/$USER_ID")
