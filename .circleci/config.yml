@@ -106,18 +106,17 @@ jobs:
       - run:
           name: "Prepare Signing Configuration (Release Only)"
           working_directory: ~/project/cordova-project
-          # --- PERBAIKAN DI SINI: Menggunakan folded block scalar (>) ---
-          command: >
+          command: |
             if [[ "$BUILD_TYPE" == "release-apk" || "$BUILD_TYPE" == "release-aab" ]]; then
-              curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Mempersiapkan konfigurasi rilis..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook";
-              curl -L -o release.jks "$KEYSTORE_URL";
-              PACKAGE_TYPE="apk";
+              curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Mempersiapkan konfigurasi rilis..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
+              curl -L -o release.jks "$KEYSTORE_URL"
+              PACKAGE_TYPE="apk"
               if [[ "$BUILD_TYPE" == "release-aab" ]]; then
-                PACKAGE_TYPE="bundle";
-              fi;
+                PACKAGE_TYPE="bundle"
+              fi
               cat > build.json \<< EOF
-            { "android": { "release": { "keystore": "release.jks", "storePassword": "$KEYSTORE_PASSWORD", "alias": "$KEY_ALIAS", "password": "$KEY_PASSWORD", "packageType": "$PACKAGE_TYPE" } } }
-            EOF
+{ "android": { "release": { "keystore": "release.jks", "storePassword": "$KEYSTORE_PASSWORD", "alias": "$KEY_ALIAS", "password": "$KEY_PASSWORD", "packageType": "$PACKAGE_TYPE" } } }
+EOF
             fi
 
       - run:
