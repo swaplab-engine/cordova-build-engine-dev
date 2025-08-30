@@ -97,7 +97,6 @@ jobs:
             curl -L -o cordovaProject.zip "$PROJECT_URL"
             unzip -o cordovaProject.zip -d cordova-project
 
-      # --- PERBAIKAN DI SINI: Kembali menggunakan package.json ---
       - restore_cache:
           name: Restore project dependencies cache
           keys:
@@ -116,8 +115,8 @@ jobs:
                 PACKAGE_TYPE="bundle"
               fi
               cat > build.json \<< EOF
-              { "android": { "release": { "keystore": "release.jks", "storePassword": "$KEYSTORE_PASSWORD", "alias": "$KEY_ALIAS", "password": "$KEY_PASSWORD", "packageType": "$PACKAGE_TYPE" } } }
-              EOF
+{ "android": { "release": { "keystore": "release.jks", "storePassword": "$KEYSTORE_PASSWORD", "alias": "$KEY_ALIAS", "password": "$KEY_PASSWORD", "packageType": "$PACKAGE_TYPE" } } }
+EOF
             fi
 
       - run:
@@ -125,7 +124,6 @@ jobs:
           working_directory: ~/project/cordova-project
           command: |
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Menginstal dependensi proyek (npm install)..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
-            # npm install akan membuat package-lock.json jika belum ada
             npm install > ../npm_install_log.txt 2>&1
 
       - run:
@@ -145,7 +143,6 @@ jobs:
               echo "--- Cordova Build Finished ---"
             } > ../build_log.txt 2>&1
 
-      # --- PERBAIKAN DI SINI: Kembali menggunakan package.json untuk menyimpan cache ---
       - save_cache:
           key: node-modules-v2-{{ checksum "cordova-project/package.json" }}
           paths:
