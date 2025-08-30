@@ -21,10 +21,10 @@ jobs:
       outcome: ${{ steps.final_check.outputs.outcome }}
 
     steps:
-      # ... (Semua step setup dari awal sampai sebelum build tidak diubah) ...
       - name: Record start time
         shell: bash
         run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
+        
       - name: Report Build In Progress
         shell: bash
         run: |
@@ -37,15 +37,18 @@ jobs:
               "status": "in_progress"
             }' \
             "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
+            
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          
       - name: Setup Java (Temurin)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
+          
       - name: Download and Unzip Project
         shell: bash
         run: |
@@ -57,6 +60,11 @@ jobs:
           unzip -q cordovaProject.zip -d cordova-project
           echo "Unzipped project -> listing top-level:"
           ls -la cordova-project | sed -n '1,200p'
+
+      # ===============================================
+      # BLOK CACHING - SEMUA DIKELOMPOKKAN DI SINI
+      # ===============================================
+
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -68,6 +76,7 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-v${{ env.GRADLE_VERSION }}-
             gradle-${{ runner.os }}-
+            
       - name: Cache project node_modules
         uses: actions/cache@v4
         with:
@@ -75,13 +84,36 @@ jobs:
           key: node-modules-${{ runner.os }}-${{ hashFiles('cordova-project/package-lock.json', 'cordova-project/package.json') }}
           restore-keys: |
             node-modules-${{ runner.os }}-
+            
       - name: Cache npm local cache
         uses: actions/cache@v4
         with:
-          path: $HOME/.npm
+          path: ~/.npm
           key: npm-cache-${{ runner.os }}-${{ hashFiles('cordova-project/**/package-lock.json') }}
           restore-keys: |
             npm-cache-${{ runner.os }}-
+
+      # --- [BARU] Cache untuk pustaka internal Cordova (platforms, plugins) ---
+      - name: Cache Cordova libraries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cordova
+          key: cordova-libs-${{ runner.os }}-${{ hashFiles('cordova-project/config.xml', 'cordova-project/package.json') }}
+          restore-keys: |
+            cordova-libs-${{ runner.os }}-
+
+      # --- [BARU] Cache untuk paket npm yang diinstal secara global (seperti cordova-cli) ---
+      - name: Get npm global package location
+        id: npm-global-path
+        shell: bash
+        run: echo "path=$(npm root -g)" >> $GITHUB_OUTPUT
+
+      - name: Cache global npm packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.npm-global-path.outputs.path }}
+          key: npm-global-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('package-lock.json') }} # Kunci bisa disederhanakan jika versi cordova-cli tetap
+
       - name: Cache Android SDK components
         uses: actions/cache@v4
         with:
@@ -94,9 +126,15 @@ jobs:
           key: android-sdk-${{ runner.os }}-api${{ env.ANDROID_API_LEVEL }}-bt${{ env.ANDROID_BUILD_TOOLS }}
           restore-keys: |
             android-sdk-${{ runner.os }}-
+
+      # ===============================================
+      # AKHIR BLOK CACHING
+      # ===============================================
+
       - name: Install Cordova CLI (global)
         shell: bash
         run: npm install -g cordova
+        
       - name: Ensure Android SDK root exists and cmdline-tools
         shell: bash
         run: |
@@ -120,6 +158,7 @@ jobs:
           export PATH="${SDK_ROOT}/cmdline-tools/latest/bin:${SDK_ROOT}/tools/bin:$PATH"
           yes | sdkmanager --sdk_root="${SDK_ROOT}" --licenses >/dev/null || true
           sdkmanager --sdk_root="${SDK_ROOT}" "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS}" || true
+          
       - name: Ensure Gradle wrapper version is locked
         shell: bash
         run: |
@@ -136,17 +175,13 @@ jobs:
       - name: Install Dependencies and Build Project
         id: cordova_build_step
         shell: bash
-        # DIPERBAIKI: Baris `PATH` dihapus dari `env` untuk menghindari menimpa PATH sistem.
         env:
           ANDROID_HOME: $HOME/Android/Sdk
           ANDROID_SDK_ROOT: $HOME/Android/Sdk
         run: |
           set -e -o pipefail
-          # DIPERBAIKI: `PATH` sekarang ditambahkan dengan aman di dalam skrip.
           export PATH="$HOME/Android/Sdk/platform-tools:$PATH"
           
-          # Blok debugging tidak diperlukan lagi, tapi bisa ditambahkan kembali jika ada masalah lain.
-
           {
             cd cordova-project
 
@@ -159,6 +194,7 @@ jobs:
 
             echo "--- Ensure Android platform present ---"
             cordova platform rm android || true
+            # --no-fetch akan menggunakan platform dari cache jika tersedia
             cordova platform add android --no-fetch
 
             echo "--- Gradle settings ---"
@@ -193,12 +229,13 @@ jobs:
             echo "--- Cordova Build Finished ---"
           } 2>&1 | tee ../build_log.txt
       
-      # ... (Sisa workflow tidak diubah) ...
+      # ... sisa workflow Anda (upload, report, etc.) tetap sama ...
       - name: Setup SSH for SCP
         if: success()
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          
       - name: Upload Build File via SCP and Report Success
         if: success()
         shell: bash
@@ -230,14 +267,15 @@ jobs:
               "status": "complete", "durationSeconds": "'"$duration"'", "downloadUrl": "'"$DOWNLOAD_URL"'"
             }' \
             "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
+            
       - name: Upload Log File and Report Failure
         if: failure()
         shell: bash
         run: |
           INTERNAL_API_URL="${{ github.event.client_payload.internalApiUrl }}"
           if [ -z "$INTERNAL_API_URL" ]; then
-              echo "::error::Fatal: internalApiUrl not received in payload. Cannot report failure."
-              exit 1
+            echo "::error::Fatal: internalApiUrl not received in payload. Cannot report failure."
+            exit 1
           fi
 
           USER_ID="${{ github.event.client_payload.userId }}"
@@ -257,6 +295,7 @@ jobs:
           duration=$((end_time - start_time))
 
           curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId": "'"$BUILD_ID"'", "userId": "'"$USER_ID"'","status": "failed", "durationSeconds": "'"$duration"'", "logFile": "'"$LOG_FILENAME"'","logSnippet": "'"$ESCAPED_LOG_SNIPPET"'"}' "$INTERNAL_API_URL/api/github-webhook"
+          
       - name: Final check
         id: final_check
         if: always()
