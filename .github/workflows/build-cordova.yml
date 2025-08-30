@@ -31,17 +31,29 @@ jobs:
               "status": "in_progress"
             }' \
             "${{ github.event.client_payload.internalApiUrl }}/api/github-webhook"
-            
+
       - name: Set up Node.js v20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
-      - name: Set up JDK 17
+      - name: Set up JDK 17 (Temurin)
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: gradle
+
+      - name: Cache Gradle Wrapper & Caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-8.2.0-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-8.2.0-
 
       - name: Install Cordova CLI
         shell: bash
@@ -55,27 +67,32 @@ jobs:
           mkdir cordova-project
           unzip cordovaProject.zip -d cordova-project
 
+      - name: Cache Node Modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            cordova-project/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('cordova-project/package-lock.json', 'cordova-project/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
       - name: Install Dependencies and Build Project
         id: cordova_build_step
         shell: bash
         run: |
-          # Redirect semua output ke file log
           exec &> ../build_log.txt
-          set -e # Hentikan skrip jika ada error
+          set -e
           
           cd cordova-project
           echo "--- Installing Project Dependencies ---"
-          npm install
-          echo "--- Adding Android Platform ---"
-          cordova platform add android
+          npm ci || npm install
+          echo "--- Adding Android Platform (locked to Gradle 8.2.0) ---"
+          cordova platform add android@latest
           echo "--- Starting Cordova Build ---"
 
-          # Logika build dipisahkan untuk debug dan release
           if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
-            # Build Debug (tanpa signing)
-            cordova build android --debug -- --gradleArg=--no-daemon
+            cordova build android --debug -- --gradleArg=--no-daemon --gradleArg=-Pandroid.useAndroidX=true
           else
-            # Build Release (dengan signing dari payload)
             echo "--- Downloading Keystore for Release Build ---"
             KEYSTORE_URL="${{ github.event.client_payload.keystoreUrl }}"
             curl -L -o release.jks "$KEYSTORE_URL"
@@ -91,6 +108,7 @@ jobs:
               --alias="${{ github.event.client_payload.keyAlias }}" \
               --storePassword="${{ github.event.client_payload.keystorePassword }}" \
               --password="${{ github.event.client_payload.keyPassword }}" \
+              --gradleArg=-Pandroid.useAndroidX=true \
               $PACKAGE_TYPE_FLAG
           fi
           echo "--- Cordova Build Finished ---"
