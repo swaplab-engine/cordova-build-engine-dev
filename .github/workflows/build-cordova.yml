@@ -172,7 +172,7 @@ jobs:
           # Menghapus dan menambah platform untuk memastikan file sesuai
           cordova platform rm android || true
           # Menggunakan versi spesifik sesuai permintaan
-          cordova platform add android@14.0.1 --no-fetch
+          cordova platform add android --no-fetch
 
           echo "--- Gradle settings ---"
           export GRADLE_OPTS="-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx1536m"
