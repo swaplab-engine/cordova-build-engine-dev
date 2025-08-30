@@ -182,7 +182,6 @@ jobs:
         if: failure() || cancelled()
         shell: bash
         run: |
-          # ... (Langkah ini tetap sama, tidak ada perubahan) ...
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
@@ -195,7 +194,11 @@ jobs:
           if [[ "$HTTP_CODE" == "200" ]]; then LOG_URL="${APP_BASE_URL}/logs/github/${USER_ID}/${LOG_URL_FILENAME}"; fi
           end_time=$(date +%s)
           duration=$((end_time - start_time))
-          LOG_SNIPPET=$(tail -n 20 final_log.txt | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          
+          # ### SATU-SATUNYA PERUBAHAN ADA DI BARIS INI ###
+          # Menambahkan `sed` untuk memfilter path /home/runner/work/ sebelum membuat snippet JSON
+          LOG_SNIPPET=$(tail -n 20 final_log.txt | sed 's|/home/runner/work/[^ ]*|[PROJECT_PATH]|g' | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          
           curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d "{\"buildId\": \"$BUILD_ID\", \"userId\": \"$USER_ID\", \"status\": \"failed\", \"durationSeconds\": \"$duration\", \"logUrl\": \"$LOG_URL\", \"logSnippet\": \"$LOG_SNIPPET\", \"ciProvider\": \"github\"}" "$APP_BASE_URL/api/github-webhook"
 
       - name: Final check
