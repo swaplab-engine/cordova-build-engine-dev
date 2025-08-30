@@ -43,7 +43,6 @@ jobs:
       # 3. PROSES CACHING UNTUK PERCEPATAN
       # ===================================================================
       - name: Restore All Caches
-        id: cache-all
         uses: actions/cache@v4
         with:
           path: |
@@ -86,12 +85,9 @@ jobs:
             curl -L -o release.jks "${{ github.event.client_payload.keystoreUrl }}"
             PACKAGE_TYPE="apk"
             if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then PACKAGE_TYPE="bundle"; fi
-            
-            # --- BLOK YANG DIPERBAIKI ---
             cat > build.json << EOF
             { "android": { "release": { "keystore": "release.jks", "storePassword": "${{ github.event.client_payload.keystorePassword }}", "alias": "${{ github.event.client_payload.keyAlias }}", "password": "${{ github.event.client_payload.keyPassword }}", "packageType": "$PACKAGE_TYPE" } } }
 EOF
-            # --- AKHIR BLOK YANG DIPERBAIKI ---
           fi
 
           send_log "Menginstal dependensi proyek (npm install)..."
@@ -119,7 +115,6 @@ EOF
         if: success()
         shell: bash
         run: |
-          # ... (Langkah ini tetap sama) ...
           BUILD_TYPE="${{ github.event.client_payload.buildType }}"
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
@@ -138,7 +133,6 @@ EOF
         if: failure() || cancelled()
         shell: bash
         run: |
-          # ... (Langkah ini tetap sama) ...
           USER_ID="${{ github.event.client_payload.userId }}"
           APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
           BUILD_ID="${{ github.event.client_payload.buildId }}"
