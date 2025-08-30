@@ -62,7 +62,7 @@ jobs:
           ls -la cordova-project | sed -n '1,200p'
 
       # ===============================================
-      # BLOK CACHING - SEMUA DIKELOMPOKKAN DI SINI
+      # BLOK CACHING
       # ===============================================
 
       - name: Cache Gradle
@@ -93,7 +93,6 @@ jobs:
           restore-keys: |
             npm-cache-${{ runner.os }}-
 
-      # --- [BARU] Cache untuk pustaka internal Cordova (platforms, plugins) ---
       - name: Cache Cordova libraries
         uses: actions/cache@v4
         with:
@@ -102,7 +101,6 @@ jobs:
           restore-keys: |
             cordova-libs-${{ runner.os }}-
 
-      # --- [BARU] Cache untuk paket npm yang diinstal secara global (seperti cordova-cli) ---
       - name: Get npm global package location
         id: npm-global-path
         shell: bash
@@ -112,12 +110,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ steps.npm-global-path.outputs.path }}
-          key: npm-global-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('package-lock.json') }} # Kunci bisa disederhanakan jika versi cordova-cli tetap
+          key: npm-global-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('package-lock.json') }}
 
       - name: Cache Android SDK components
         uses: actions/cache@v4
         with:
           path: |
+            $HOME/Android/Sdk/cmdline-tools
             $HOME/Android/Sdk/platforms
             $HOME/Android/Sdk/build-tools
             $HOME/Android/Sdk/platform-tools
@@ -154,9 +153,13 @@ jobs:
             mv cmdline-tools "${SDK_ROOT}/cmdline-tools/latest" || true
             cd -
             rm -rf "$tmpdir"
+          else
+            echo "Android commandline tools found in cache."
           fi
+          
           export PATH="${SDK_ROOT}/cmdline-tools/latest/bin:${SDK_ROOT}/tools/bin:$PATH"
           yes | sdkmanager --sdk_root="${SDK_ROOT}" --licenses >/dev/null || true
+          # sdkmanager akan memeriksa dan hanya mengunduh jika belum ada di cache
           sdkmanager --sdk_root="${SDK_ROOT}" "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS}" || true
           
       - name: Ensure Gradle wrapper version is locked
@@ -194,7 +197,6 @@ jobs:
 
             echo "--- Ensure Android platform present ---"
             cordova platform rm android || true
-            # --no-fetch akan menggunakan platform dari cache jika tersedia
             cordova platform add android --no-fetch
 
             echo "--- Gradle settings ---"
@@ -229,7 +231,7 @@ jobs:
             echo "--- Cordova Build Finished ---"
           } 2>&1 | tee ../build_log.txt
       
-      # ... sisa workflow Anda (upload, report, etc.) tetap sama ...
+      # ... Sisa workflow tidak berubah ...
       - name: Setup SSH for SCP
         if: success()
         uses: webfactory/ssh-agent@v0.9.0
