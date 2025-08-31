@@ -16,7 +16,6 @@ parameters:
   buildType:
     type: string
     default: "debug-apk"
-  # Parameter ini diperlukan agar server bisa memicu build
   ci_provider:
     type: string
     default: "circleci"
@@ -62,7 +61,75 @@ jobs:
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Memulai proses build..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "in_progress", "ciProvider": "circleci", "runId": "'"$CIRCLE_WORKFLOW_ID"'"}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
 
-      # ... (Semua langkah lain tetap sama seperti file asli Anda) ...
+      - run:
+          name: "Report Environment Setup"
+          command: |
+            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Mempersiapkan lingkungan (Node.js & Java)..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
+
+      - run:
+          name: "Report Cache Check"
+          command: |
+            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Memeriksa cache untuk percepatan build..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
+      
+      - restore_cache:
+          keys:
+            - cordova-cli-v2
+      - run:
+          name: "Install Cordova CLI (if not cached)"
+          command: |
+            if ! command -v cordova &> /dev/null; then
+              sudo npm install -g cordova
+            else
+              echo "Cordova CLI dipulihkan dari cache."
+            fi
+      - save_cache:
+          key: cordova-cli-v2
+          paths:
+            - /usr/local/lib/node_modules/cordova
+            - /usr/local/lib/node_modules/npm
+
+      - run:
+          name: "Download and Unzip Project"
+          command: |
+            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Mengunduh dan mengekstrak proyek..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
+            mkdir -p cordova-project
+            curl -L -o cordovaProject.zip "$PROJECT_URL"
+            unzip -o cordovaProject.zip -d cordova-project
+
+      - restore_cache:
+          name: Restore project dependencies cache
+          keys:
+            - node-modules-v2-{{ checksum "cordova-project/package.json" }}
+            - node-modules-v2-
+
+      - run:
+          name: "Prepare Signing Configuration (Release Only)"
+          working_directory: ~/project/cordova-project
+          command: |
+            if [[ "$BUILD_TYPE" == "release-apk" || "$BUILD_TYPE" == "release-aab" ]]; then
+              curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Mempersiapkan konfigurasi rilis..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
+              curl -L -o release.jks "$KEYSTORE_URL"
+              
+              PACKAGE_TYPE="apk"
+              if [[ "$BUILD_TYPE" == "release-aab" ]]; then
+                PACKAGE_TYPE="bundle"
+              fi
+
+              printf '{ "android": { "release": { "keystore": "release.jks", "storePassword": "%s", "alias": "%s", "password": "%s", "packageType": "%s" } } }' \
+                "$KEYSTORE_PASSWORD" \
+                "$KEY_ALIAS" \
+                "$KEY_PASSWORD" \
+                "$PACKAGE_TYPE" \
+                > build.json
+            fi
+
+      - run:
+          name: "Install Project Dependencies"
+          working_directory: ~/project/cordova-project
+          command: |
+            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Menginstal dependensi proyek (npm install)..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook";
+            
+            npm install > ../npm_install_log.txt 2>&1
 
       - run:
           name: "Build Android Project"
@@ -115,7 +182,6 @@ jobs:
             source $BASH_ENV
             end_time=$(date +%s)
             duration=$((end_time - START_TIME))
-            # PERBAIKAN: Menggunakan "circleci" secara langsung
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d "{\"buildId\": \"$BUILD_ID\", \"userId\": \"$USER_ID\", \"status\": \"complete\", \"durationSeconds\": \"$duration\", \"downloadUrl\": \"$DOWNLOAD_URL\", \"ciProvider\": \"circleci\"}" "$APP_BASE_URL/api/github-webhook"
 
       - run:
@@ -125,7 +191,6 @@ jobs:
             cat npm_install_log.txt build_log.txt > final_log.txt 2>/dev/null || cat build_log.txt > final_log.txt 2>/dev/null || echo "Build gagal pada tahap awal." > final_log.txt
             LOG_FILE_PATH="final_log.txt"
             LOG_FILE_NAME="${BUILD_ID}.log"
-            # PERBAIKAN: Menggunakan "circleci" secara langsung
             UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -F "logFile=@${LOG_FILE_PATH};filename=${LOG_FILE_NAME}" -F "buildId=$BUILD_ID" -F "ci_provider=circleci" -H "X-Build-Secret: $WEBHOOK_SECRET" "$APP_BASE_URL/upload-log/$USER_ID")
             HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
             LOG_URL_FILENAME=$(echo "$UPLOAD_RESPONSE" | sed '$d')
@@ -135,7 +200,6 @@ jobs:
             source $BASH_ENV
             end_time=$(date +%s)
             duration=$((end_time - START_TIME))
-            # PERBAIKAN: Menggunakan "circleci" secara langsung
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d "{\"buildId\": \"$BUILD_ID\", \"userId\": \"$USER_ID\", \"status\": \"failed\", \"durationSeconds\": \"$duration\", \"logUrl\": \"$LOG_URL\", \"logSnippet\": \"$LOG_SNIPPET\", \"ciProvider\": \"circleci\"}" "$APP_BASE_URL/api/github-webhook"
 
 workflows:
