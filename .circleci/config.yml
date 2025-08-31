@@ -182,6 +182,7 @@ jobs:
             source $BASH_ENV
             end_time=$(date +%s)
             duration=$((end_time - START_TIME))
+            # --- PERBAIKAN DI SINI: Hardcode "circleci" ---
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d "{\"buildId\": \"$BUILD_ID\", \"userId\": \"$USER_ID\", \"status\": \"complete\", \"durationSeconds\": \"$duration\", \"downloadUrl\": \"$DOWNLOAD_URL\", \"ciProvider\": \"circleci\"}" "$APP_BASE_URL/api/github-webhook"
 
       - run:
@@ -191,6 +192,7 @@ jobs:
             cat npm_install_log.txt build_log.txt > final_log.txt 2>/dev/null || cat build_log.txt > final_log.txt 2>/dev/null || echo "Build gagal pada tahap awal." > final_log.txt
             LOG_FILE_PATH="final_log.txt"
             LOG_FILE_NAME="${BUILD_ID}.log"
+            # --- PERBAIKAN DI SINI: Hardcode "circleci" ---
             UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -F "logFile=@${LOG_FILE_PATH};filename=${LOG_FILE_NAME}" -F "buildId=$BUILD_ID" -F "ci_provider=circleci" -H "X-Build-Secret: $WEBHOOK_SECRET" "$APP_BASE_URL/upload-log/$USER_ID")
             HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
             LOG_URL_FILENAME=$(echo "$UPLOAD_RESPONSE" | sed '$d')
@@ -200,6 +202,7 @@ jobs:
             source $BASH_ENV
             end_time=$(date +%s)
             duration=$((end_time - START_TIME))
+            # --- PERBAIKAN DI SINI: Hardcode "circleci" ---
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d "{\"buildId\": \"$BUILD_ID\", \"userId\": \"$USER_ID\", \"status\": \"failed\", \"durationSeconds\": \"$duration\", \"logUrl\": \"$LOG_URL\", \"logSnippet\": \"$LOG_SNIPPET\", \"ciProvider\": \"circleci\"}" "$APP_BASE_URL/api/github-webhook"
 
 workflows:
