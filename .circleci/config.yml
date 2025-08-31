@@ -16,9 +16,7 @@ parameters:
   buildType:
     type: string
     default: "debug-apk"
-  ci_provider:
-    type: string
-    default: "circleci"
+  # Parameter ci_provider tidak lagi diperlukan
   keystoreUrl:
     type: string
     default: ""
@@ -47,6 +45,7 @@ jobs:
       BUILD_ID: << pipeline.parameters.buildId >>
       APP_BASE_URL: << pipeline.parameters.appBaseUrl >>
       BUILD_TYPE: << pipeline.parameters.buildType >>
+      # Variabel lingkungan CI_PROVIDER tidak lagi diperlukan
       PROJECT_URL: << pipeline.parameters.projectUrl >>
       KEYSTORE_URL: << pipeline.parameters.keystoreUrl >>
       KEYSTORE_PASSWORD: << pipeline.parameters.keystorePassword >>
@@ -60,7 +59,8 @@ jobs:
             echo 'export START_TIME=$(date +%s)' >> $BASH_ENV
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Memulai proses build..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
             curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "in_progress", "ciProvider": "circleci", "runId": "'"$CIRCLE_WORKFLOW_ID"'"}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
-
+      
+      
       - run:
           name: "Report Environment Setup"
           command: |
