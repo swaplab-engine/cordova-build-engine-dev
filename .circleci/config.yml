@@ -55,7 +55,7 @@ jobs:
       - run:
           name: "Report Build In Progress & Start Time"
           command: |
-            echo 'export START_TIME=$(date +%s)' >> $BASH_ENV
+            echo "export START_TIME=$(date +%s)" >> $BASH_ENV
             curl --fail -X POST \
               -H "Content-Type: application/json" \
               -H "X-Build-Secret: $WEBHOOK_SECRET" \
