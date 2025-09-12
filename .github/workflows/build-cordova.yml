@@ -1,4 +1,5 @@
-# .github/workflows/cordova-build.yml
+# .github/workflows/build-cordova.yml (di repo -dev)
+
 name: Cordova Build
 on:
   repository_dispatch:
@@ -11,6 +12,23 @@ jobs:
       contents: read
     timeout-minutes: 8
     steps:
+      # ▼▼▼ TAMBAHKAN BLOK CACHE DI SINI ▼▼▼
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: ./.cache/gradle
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/build.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Cache global npm packages
+        uses: actions/cache@v4
+        with:
+          path: ./.cache/npm
+          key: ${{ runner.os }}-npm-global-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-global-
+      # ▲▲▲ AKHIR BLOK CACHE ▲▲▲
       - name: Build Cordova Project via Secure Engine
         uses: swaplab-engine/cordova-build-engine@main
         with:
