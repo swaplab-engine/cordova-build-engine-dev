@@ -28,7 +28,7 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/build.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
-
+            
       - name: Cache global npm packages
         uses: actions/cache@v4
         with:
@@ -36,7 +36,7 @@ jobs:
           key: ${{ runner.os }}-npm-global-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-npm-global-
-
+            
       - name: Build Cordova Project via Secure Engine
         uses: swaplab-engine/cordova-build-engine@main
         with:
