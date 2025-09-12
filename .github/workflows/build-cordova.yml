@@ -1,6 +1,7 @@
-# .github/workflows/build-cordova.yml (di repo -dev)
+# File: .github/workflows/build-cordova.yml (Final dan Lengkap)
 
 name: Cordova Build
+
 on:
   repository_dispatch:
     types: [trigger-build]
@@ -10,9 +11,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read
     timeout-minutes: 8
     steps:
-      # ▼▼▼ TAMBAHKAN BLOK CACHE DI SINI ▼▼▼
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_PAT }}
+
       - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
@@ -28,7 +36,7 @@ jobs:
           key: ${{ runner.os }}-npm-global-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-npm-global-
-      # ▲▲▲ AKHIR BLOK CACHE ▲▲▲
+
       - name: Build Cordova Project via Secure Engine
         uses: swaplab-engine/cordova-build-engine@main
         with:
@@ -41,7 +49,6 @@ jobs:
           keystoreUrl: ${{ github.event.client_payload.keystoreUrl }}
 
           # --- Secrets ---
-          # Penting: Server Anda harus mengatur secrets ini di repo pengguna via API
           keystorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
           keyAlias: ${{ secrets.KEY_ALIAS }}
           keyPassword: ${{ secrets.KEY_PASSWORD }}
