@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 8
     steps:
       - name: Build Cordova Project via Secure Engine
-        uses: swaplab-engine/cordova-build-engine-dev@v1
+        uses: swaplab-engine/cordova-build-engine-dev@main
         with:
           # --- Payload Data ---
           appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
