@@ -17,7 +17,7 @@ jobs:
         with:
           registry: ghcr.io
           username: swaplab-engine # Username/Organisasi Anda
-          password: "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" # Secret PAT yang Anda buat
+          password: ${{ secrets.GHCR_PULL_TOKEN }}
 
       # Action Anda dipanggil SETELAH login berhasil
       - name: Build Cordova Project via Secure Engine
