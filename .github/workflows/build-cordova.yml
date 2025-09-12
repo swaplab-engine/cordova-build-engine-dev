@@ -11,35 +11,30 @@ jobs:
       contents: read
     timeout-minutes: 8
     steps:
-      - name: Check if secret is loaded
-        run: echo "Is GHCR_PAT secret set? ${{ secrets.GHCR_PAT != '' }}"
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: swaplab-engine # Nama user/organisasi pemilik image
-          password: ${{ secrets.GHCR_PAT }} # Menggunakan secret yang baru dibuat
+          username: swaplab-engine
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Build Cordova Project via Secure Engine
-        uses: swaplab-engine/cordova-build-engine@main
-        with:
-          # --- Payload Data ---
-          appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
-          buildId: ${{ github.event.client_payload.buildId }}
-          userId: ${{ github.event.client_payload.userId }}
-          projectUrl: ${{ github.event.client_payload.projectUrl }}
-          buildType: ${{ github.event.client_payload.buildType }}
-          keystoreUrl: ${{ github.event.client_payload.keystoreUrl }}
-
-          # --- Secrets ---
-          # Penting: Server Anda harus mengatur secrets ini di repo pengguna via API
-          keystorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
-          keyAlias: ${{ secrets.KEY_ALIAS }}
-          keyPassword: ${{ secrets.KEY_PASSWORD }}
-          webhookSecret: ${{ secrets.WEBHOOK_SECRET }}
-          r2AccountId: ${{ secrets.R2_ACCOUNT_ID }}
-          r2AccessKeyId: ${{ secrets.R2_ACCESS_KEY_ID }}
-          r2SecretAccessKey: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          r2BucketName: ${{ secrets.R2_BUCKET_NAME }}
-          r2PublicUrl: ${{ secrets.R2_PUBLIC_URL }}
+        run: |
+          docker run --rm \
+            -e INPUT_APPBASEURL='${{ github.event.client_payload.appBaseUrl }}' \
+            -e INPUT_BUILDID='${{ github.event.client_payload.buildId }}' \
+            -e INPUT_USERID='${{ github.event.client_payload.userId }}' \
+            -e INPUT_PROJECTURL='${{ github.event.client_payload.projectUrl }}' \
+            -e INPUT_BUILDTYPE='${{ github.event.client_payload.buildType }}' \
+            -e INPUT_KEYSTOREURL='${{ github.event.client_payload.keystoreUrl }}' \
+            -e INPUT_KEYSTOREPASSWORD='${{ secrets.KEYSTORE_PASSWORD }}' \
+            -e INPUT_KEYALIAS='${{ secrets.KEY_ALIAS }}' \
+            -e INPUT_KEYPASSWORD='${{ secrets.KEY_PASSWORD }}' \
+            -e INPUT_WEBHOOKSECRET='${{ secrets.WEBHOOK_SECRET }}' \
+            -e INPUT_R2ACCOUNTID='${{ secrets.R2_ACCOUNT_ID }}' \
+            -e INPUT_R2ACCESSKEYID='${{ secrets.R2_ACCESS_KEY_ID }}' \
+            -e INPUT_R2SECRETACCESSKEY='${{ secrets.R2_SECRET_ACCESS_KEY }}' \
+            -e INPUT_R2BUCKETNAME='${{ secrets.R2_BUCKET_NAME }}' \
+            -e INPUT_R2PUBLICURL='${{ secrets.R2_PUBLIC_URL }}' \
+            -e GITHUB_RUN_ID='${{ github.run_id }}' \
+            ghcr.io/swaplab-engine/cordova-build-engine:latest
