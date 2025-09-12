@@ -1,5 +1,5 @@
-name: Cordova Build (Debug/Release APK/AAB)
-
+# .github/workflows/cordova-build.yml
+name: Cordova Build
 on:
   repository_dispatch:
     types: [trigger-build]
@@ -10,220 +10,26 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 8
-
     steps:
-      - name: Record start time
-        shell: bash
-        run: |
-          echo "start_time=$(date +%s)" >> $GITHUB_ENV
-
-      # ===================================================================
-      # 1. PERSIAPAN DAN LAPORAN STATUS AWAL
-      # ===================================================================
-      - name: Report Build Started
-        shell: bash
-        run: |
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId":"${{ github.event.client_payload.buildId }}","userId":"${{ github.event.client_payload.userId }}","status":"log_update","message":"Starting the build process..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook" || true
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId":"${{ github.event.client_payload.buildId }}","userId":"${{ github.event.client_payload.userId }}","status":"in_progress","ciProvider":"github","runId":"${{ github.run_id }}"}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook" || true
-
-      # ===================================================================
-      # 2. PENYIAPAN LINGKUNGAN BUILD
-      # ===================================================================
-      - name: Preparing environment (Node.js & Java)
-        shell: bash
-        run: |
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId":"${{ github.event.client_payload.buildId }}","userId":"${{ github.event.client_payload.userId }}","status":"log_update","message":"Preparing the environment (Node.js & Java)..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook" || true
-      - uses: actions/setup-node@v4
+      - name: Build Cordova Project via Secure Engine
+        uses: swaplab-engine/cordova-build-engine-dev@v1
         with:
-          node-version: '20'
-      - uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
+          # --- Payload Data ---
+          appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
+          buildId: ${{ github.event.client_payload.buildId }}
+          userId: ${{ github.event.client_payload.userId }}
+          projectUrl: ${{ github.event.client_payload.projectUrl }}
+          buildType: ${{ github.event.client_payload.buildType }}
+          keystoreUrl: ${{ github.event.client_payload.keystoreUrl }}
 
-      # ===================================================================
-      # 3. DOWNLOAD PROJECT & PERSIAPAN AWAL
-      # ===================================================================
-      - name: Download and Unzip Project from R2
-        shell: bash
-        run: |
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId":"${{ github.event.client_payload.buildId }}","userId":"${{ github.event.client_payload.userId }}","status":"log_update","message":"Downloading and extracting the project from storage..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook" || true
-          curl -L -o cordovaProject.zip "${{ github.event.client_payload.projectUrl }}"
-          mkdir -p cordova-project
-          unzip -q cordovaProject.zip -d cordova-project
-
-      # ===================================================================
-      # 4. PENGATURAN CACHE (BAGIAN PALING PENTING)
-      # ===================================================================
-      - name: Check & Report cache status
-        shell: bash
-        run: |
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId":"${{ github.event.client_payload.buildId }}","userId":"${{ github.event.client_payload.userId }}","status":"log_update","message":"Checking caches to speed up build..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook" || true
-
-      - name: Cache global npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-global-cache-v4
-
-      - name: Cache Cordova CLI
-        uses: actions/cache@v4
-        with:
-          path: /opt/hostedtoolcache/node/20.*.*/lib/node_modules/cordova
-          key: ${{ runner.os }}-cordova-cli-v1
-
-      - name: Cache project node_modules
-        uses: actions/cache@v4
-        id: cache-node-modules
-        with:
-          path: cordova-project/node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('cordova-project/package.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-modules-
-
-      - name: Cache Cordova platforms and plugins
-        uses: actions/cache@v4
-        id: cache-cordova-platforms
-        with:
-          path: |
-            cordova-project/platforms
-            cordova-project/plugins
-          key: ${{ runner.os }}-cordova-platforms-${{ hashFiles('cordova-project/package.json', 'cordova-project/config.xml') }}
-
-      - name: Cache Gradle packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('cordova-project/**/build.gradle*', 'cordova-project/**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      # ===================================================================
-      # 5. INSTALASI & BUILD
-      # ===================================================================
-      - name: Install Cordova CLI
-        shell: bash
-        run: npm install -g cordova
-
-      - name: Prepare Signing Configuration (release)
-        if: ${{ startsWith(github.event.client_payload.buildType, 'release') }}
-        shell: bash
-        run: |
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId":"${{ github.event.client_payload.buildId }}","userId":"${{ github.event.client_payload.userId }}","status":"log_update","message":"Preparing release configuration (keystore)..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook" || true
-          cd cordova-project
-          curl -L -o release.jks "${{ github.event.client_payload.keystoreUrl }}"
-          PACKAGE_TYPE="apk"
-          if [[ "${{ github.event.client_payload.buildType }}" == "release-aab" ]]; then
-            PACKAGE_TYPE="bundle"
-          fi
-          printf '%s\n' "{\"android\":{\"release\":{\"keystore\":\"release.jks\",\"storePassword\":\"${{ github.event.client_payload.keystorePassword }}\",\"alias\":\"${{ github.event.client_payload.keyAlias }}\",\"password\":\"${{ github.event.client_payload.keyPassword }}\",\"packageType\":\"$PACKAGE_TYPE\"}}}" > build.json
-
-      - name: Install Dependencies and Build Project
-        shell: bash
-        run: |
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId":"${{ github.event.client_payload.buildId }}","userId":"${{ github.event.client_payload.userId }}","status":"log_update","message":"Installing project dependencies (npm)..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook" || true
-          cd cordova-project
-
-          if [ "${{ steps.cache-node-modules.outputs.cache-hit }}" != 'true' ]; then
-            npm install > ../npm_install_log.txt 2>&1
-          else
-            echo "node_modules restored from cache." > ../npm_install_log.txt
-          fi
-
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId":"${{ github.event.client_payload.buildId }}","userId":"${{ github.event.client_payload.userId }}","status":"log_update","message":"Starting Android compilation (this may take a while)..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook" || true
-
-          {
-            echo "--- Preparing Android Platform & Building ---"
-            if [ "${{ steps.cache-cordova-platforms.outputs.cache-hit }}" != 'true' ]; then
-              echo "Cache miss for platforms. Running 'cordova platform add android'..."
-              cordova platform add android
-            else
-              echo "Platforms and plugins restored from cache. Skipping 'platform add'."
-            fi
-            
-            if [[ "${{ github.event.client_payload.buildType }}" == "debug-apk" ]]; then
-              cordova build android --debug -- --gradleArg=--no-daemon
-            else
-              cordova build android --release --buildConfig=build.json -- --gradleArg=--no-daemon
-            fi
-            echo "--- Cordova Build Finished ---"
-          } > ../build_log.txt 2>&1
-
-      # ===================================================================
-      # 6. FINISH & UPLOAD
-      # ===================================================================
-      - name: Finalizing build
-        shell: bash
-        run: |
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d '{"buildId":"${{ github.event.client_payload.buildId }}","userId":"${{ github.event.client_payload.userId }}","status":"log_update","message":"Finalizing and packaging the build results..."}' "${{ github.event.client_payload.appBaseUrl }}/api/github-webhook" || true
-
-      - name: Upload Build to R2 and Report Success
-        if: success()
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        shell: bash
-        run: |
-          BUILD_TYPE="${{ github.event.client_payload.buildType }}"
-          BUILD_ID="${{ github.event.client_payload.buildId }}"
-          USER_ID="${{ github.event.client_payload.userId }}"
-          APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
-
-          ARTIFACT_PATH=""
-          ARTIFACT_EXT=""
-          if [[ "$BUILD_TYPE" == "release-aab" ]]; then
-            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
-            ARTIFACT_EXT="aab"
-          elif [[ "$BUILD_TYPE" == "release-apk" ]]; then
-            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-            ARTIFACT_EXT="apk"
-          else
-            ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-            ARTIFACT_EXT="apk"
-          fi
-
-          if [ -z "$ARTIFACT_PATH" ]; then echo "::error::Build artifact not found!"; exit 1; fi
-
-          R2_FILENAME="${BUILD_TYPE}-${BUILD_ID}.${ARTIFACT_EXT}"
-          R2_OBJECT_KEY="builds/${USER_ID}/${R2_FILENAME}"
-          R2_ENDPOINT="https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
-          R2_BUCKET_NAME="${{ secrets.R2_BUCKET_NAME }}"
-
-          aws s3 cp "$ARTIFACT_PATH" "s3://${R2_BUCKET_NAME}/${R2_OBJECT_KEY}" --endpoint-url "$R2_ENDPOINT"
-
-          DOWNLOAD_URL="${{ secrets.R2_PUBLIC_URL }}/${R2_OBJECT_KEY}"
-
-          end_time=$(date +%s)
-          duration=$((end_time - start_time))
-
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d "{\"buildId\":\"$BUILD_ID\",\"userId\":\"$USER_ID\",\"status\":\"complete\",\"durationSeconds\":\"$duration\",\"downloadUrl\":\"$DOWNLOAD_URL\",\"ciProvider\":\"github\"}" "$APP_BASE_URL/api/github-webhook" || true
-
-      - name: Upload Log to R2 and Report Failure
-        if: always() && (failure() || cancelled())
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        shell: bash
-        run: |
-          USER_ID="${{ github.event.client_payload.userId }}"
-          APP_BASE_URL="${{ github.event.client_payload.appBaseUrl }}"
-          BUILD_ID="${{ github.event.client_payload.buildId }}"
-
-          cat npm_install_log.txt build_log.txt > final_log.txt 2>/dev/null || cat build_log.txt > final_log.txt 2>/dev/null || echo "Build failed in the initial stages." > final_log.txt
-
-          R2_LOG_FILENAME="${BUILD_ID}.log"
-          R2_LOG_OBJECT_KEY="logs/${USER_ID}/${R2_LOG_FILENAME}"
-          R2_ENDPOINT="https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
-          R2_BUCKET_NAME="${{ secrets.R2_BUCKET_NAME }}"
-          aws s3 cp final_log.txt "s3://${R2_BUCKET_NAME}/${R2_LOG_OBJECT_KEY}" --endpoint-url "$R2_ENDPOINT"
-
-          LOG_URL="${{ secrets.R2_PUBLIC_URL }}/${R2_LOG_OBJECT_KEY}"
-
-          end_time=$(date +%s)
-          duration=$((end_time - start_time))
-
-          LOG_SNIPPET=$(tail -n 20 final_log.txt | sed 's|/home/runner/work/[^ ]*|[PROJECT_PATH]|g' | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
-
-          curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: ${{ secrets.WEBHOOK_SECRET }}" -d "{\"buildId\":\"$BUILD_ID\",\"userId\":\"$USER_ID\",\"status\":\"failed\",\"durationSeconds\":\"$duration\",\"logUrl\":\"$LOG_URL\",\"logSnippet\":\"$LOG_SNIPPET\",\"ciProvider\":\"github\"}" "$APP_BASE_URL/api/github-webhook" || true
+          # --- Secrets ---
+          # Penting: Server Anda harus mengatur secrets ini di repo pengguna via API
+          keystorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias: ${{ secrets.KEY_ALIAS }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+          webhookSecret: ${{ secrets.WEBHOOK_SECRET }}
+          r2AccountId: ${{ secrets.R2_ACCOUNT_ID }}
+          r2AccessKeyId: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2SecretAccessKey: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2BucketName: ${{ secrets.R2_BUCKET_NAME }}
+          r2PublicUrl: ${{ secrets.R2_PUBLIC_URL }}
