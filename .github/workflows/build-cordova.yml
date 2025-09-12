@@ -1,70 +1,35 @@
-
 # .github/workflows/cordova-build.yml
-
 name: Cordova Build
-
 on:
-
-  repository_dispatch:
-
-    types: [trigger-build]
-
-
+  repository_dispatch:
+    types: [trigger-build]
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 8
+    steps:
+      - name: Build Cordova Project via Secure Engine
+        uses: swaplab-engine/cordova-build-engine@main
+        with:
+          # --- Payload Data ---
+          appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
+          buildId: ${{ github.event.client_payload.buildId }}
+          userId: ${{ github.event.client_payload.userId }}
+          projectUrl: ${{ github.event.client_payload.projectUrl }}
+          buildType: ${{ github.event.client_payload.buildType }}
+          keystoreUrl: ${{ github.event.client_payload.keystoreUrl }}
 
-  build:
-
-    runs-on: ubuntu-latest
-
-    permissions:
-
-      contents: read
-
-    timeout-minutes: 8
-
-    steps:
-
-      - name: Build Cordova Project via Secure Engine
-
-        uses: swaplab-engine/cordova-build-engine@main
-
-        with:
-
-          # --- Payload Data ---
-
-          appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
-
-          buildId: ${{ github.event.client_payload.buildId }}
-
-          userId: ${{ github.event.client_payload.userId }}
-
-          projectUrl: ${{ github.event.client_payload.projectUrl }}
-
-          buildType: ${{ github.event.client_payload.buildType }}
-
-          keystoreUrl: ${{ github.event.client_payload.keystoreUrl }}
-
-
-
-          # --- Secrets ---
-
-          # Penting: Server Anda harus mengatur secrets ini di repo pengguna via API
-
-          keystorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
-
-          keyAlias: ${{ secrets.KEY_ALIAS }}
-
-          keyPassword: ${{ secrets.KEY_PASSWORD }}
-
-          webhookSecret: ${{ secrets.WEBHOOK_SECRET }}
-
-          r2AccountId: ${{ secrets.R2_ACCOUNT_ID }}
-
-          r2AccessKeyId: ${{ secrets.R2_ACCESS_KEY_ID }}
-
-          r2SecretAccessKey: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-
-          r2BucketName: ${{ secrets.R2_BUCKET_NAME }}
-
-          r2PublicUrl: ${{ secrets.R2_PUBLIC_URL }}
+          # --- Secrets ---
+          # Penting: Server Anda harus mengatur secrets ini di repo pengguna via API
+          keystorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias: ${{ secrets.KEY_ALIAS }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+          webhookSecret: ${{ secrets.WEBHOOK_SECRET }}
+          r2AccountId: ${{ secrets.R2_ACCOUNT_ID }}
+          r2AccessKeyId: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2SecretAccessKey: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2BucketName: ${{ secrets.R2_BUCKET_NAME }}
+          r2PublicUrl: ${{ secrets.R2_PUBLIC_URL }}
