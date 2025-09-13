@@ -10,31 +10,6 @@ jobs:
       contents: read
     timeout-minutes: 8
     steps:
-
-
-      - name: Notify server (in_progress)
-        shell: bash
-        env:
-          APP_BASE_URL: ${{ github.event.client_payload.appBaseUrl }}
-          BUILD_ID: ${{ github.event.client_payload.buildId }}
-          USER_ID: ${{ github.event.client_payload.userId }}
-          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
-        run: |
-          set -euo pipefail
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          PAYLOAD=$(printf '{"buildId":"%s","userId":"%s","status":"in_progress","ciProvider":"github","runId":"%s","githubJobUrl":"%s","message":"%s"}' \
-            "$BUILD_ID" "$USER_ID" "${{ github.run_id }}" "$RUN_URL" "Loading Docker build container image...")
-          HTTP_CODE=$(curl -sS -w "%{http_code}" -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-Build-Secret: ${WEBHOOK_SECRET}" \
-            -d "$PAYLOAD" \
-            "${APP_BASE_URL}/api/github-webhook" || echo "000")
-          echo "Notify server response HTTP_CODE=${HTTP_CODE}" || true
-
-
-
-
-    
       # 1) Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -67,7 +42,49 @@ jobs:
           mkdir -p ./.cache/gradle ./.cache/npm ./.gradle/wrapper
           chmod -R 0777 ./.cache || true
 
-      
+      # -----------------------------
+      # ADDED: Notify server log_update (human message)
+      # -----------------------------
+      - name: Notify server (log_update - pulling docker image)
+        shell: bash
+        env:
+          APP_BASE_URL: ${{ github.event.client_payload.appBaseUrl }}
+          BUILD_ID: ${{ github.event.client_payload.buildId }}
+          USER_ID: ${{ github.event.client_payload.userId }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD_LOG=$(printf '{"buildId":"%s","userId":"%s","status":"log_update","message":"%s"}' \
+            "$BUILD_ID" "$USER_ID" "Loading Docker build container image...")
+          # best-effort send (don't fail the job if webhook temporarily unreachable)
+          curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Build-Secret: ${WEBHOOK_SECRET}" \
+            -d "$PAYLOAD_LOG" \
+            "${APP_BASE_URL}/api/github-webhook" || true
+
+      # -----------------------------
+      # ADDED: Notify server in_progress (with runId + githubJobUrl)
+      # -----------------------------
+      - name: Notify server (in_progress)
+        shell: bash
+        env:
+          APP_BASE_URL: ${{ github.event.client_payload.appBaseUrl }}
+          BUILD_ID: ${{ github.event.client_payload.buildId }}
+          USER_ID: ${{ github.event.client_payload.userId }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD_INP=$(printf '{"buildId":"%s","userId":"%s","status":"in_progress","ciProvider":"github","runId":"%s","githubJobUrl":"%s"}' \
+            "$BUILD_ID" "$USER_ID" "${{ github.run_id }}" "$RUN_URL")
+          curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Build-Secret: ${WEBHOOK_SECRET}" \
+            -d "$PAYLOAD_INP" \
+            "${APP_BASE_URL}/api/github-webhook" || true
+
       # --- NEW STEP: Pre-pull image to reduce docker run delay (optional but recommended) ---
       - name: Pre-pull Cordova Build Engine image
         run: |
