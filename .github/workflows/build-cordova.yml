@@ -4,9 +4,7 @@ on:
     types: [trigger-build]
 
 jobs:
-  # 1) Call reusable workflow as a top-level job (correct syntax)
   notify_and_prepull:
-    # 'uses' at job level calls the reusable workflow from the image repo
     uses: swaplab-engine/cordova-build-engine/.github/workflows/notify-and-prepull.yml@main
     with:
       appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
@@ -16,10 +14,8 @@ jobs:
       githubJobUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       imageTag: "main"
     secrets:
-      # pass the secret into the reusable workflow here (NOT in 'with')
       WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
 
-  # 2) main build job depends on notify_and_prepull to ensure notifications & pre-pull done
   build:
     needs: notify_and_prepull
     runs-on: ubuntu-latest
