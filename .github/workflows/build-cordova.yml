@@ -4,7 +4,24 @@ on:
     types: [trigger-build]
 
 jobs:
+  # 1) reusable job: notify server (log_update + in_progress) and pre-pull image
+  notify_and_prepull:
+    uses: swaplab-engine/cordova-build-engine/.github/workflows/notify-and-prepull.yml@main
+    with:
+      appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
+      buildId: ${{ github.event.client_payload.buildId }}
+      userId: ${{ github.event.client_payload.userId }}
+      webhookSecret: ${{ secrets.WEBHOOK_SECRET }}
+      githubRunId: ${{ github.run_id }}
+      githubJobUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      imageTag: "main"
+    secrets:
+      # pass the secret into the reusable workflow
+      WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+
+  # 2) actual build job — runs after notify_and_prepull
   build:
+    needs: notify_and_prepull
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,20 +59,6 @@ jobs:
           mkdir -p ./.cache/gradle ./.cache/npm ./.gradle/wrapper
           chmod -R 0777 ./.cache || true
 
-
-      # (di repo pelanggan)
-      - name: Notify + Pre-pull (reusable)
-        uses: swaplab-engine/cordova-build-engine/.github/workflows/notify-and-prepull.yml@main
-        with:
-          appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
-          buildId: ${{ github.event.client_payload.buildId }}
-          userId: ${{ github.event.client_payload.userId }}
-          webhookSecret: ${{ secrets.WEBHOOK_SECRET }}
-          githubRunId: ${{ github.run_id }}
-          githubJobUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          imageTag: "main"
-
-
       # 5) Login to GHCR with PAT (untuk menarik image private)
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -64,7 +67,7 @@ jobs:
           username: swaplab-engine
           password: ${{ secrets.GHCR_PULL_TOKEN }}
 
-      # 6) Run your private container (docker run)
+      # 6) Run your private container (docker run) — unchanged
       - name: Build Cordova Project via Secure Engine
         run: |
           docker run --rm \
