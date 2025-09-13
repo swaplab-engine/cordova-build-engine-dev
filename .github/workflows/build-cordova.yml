@@ -53,8 +53,10 @@ jobs:
           password: ${{ secrets.GHCR_PULL_TOKEN }}
 
       # Run your private container
+      # Langkah 3: Jalankan image privat Anda secara manual
       - name: Build Cordova Project via Secure Engine
         run: |
+          # PASTIKAN HANYA ADA SATU "docker run --rm" DI SINI
           docker run --rm \
             -v "${{ github.workspace }}:/github/workspace" \
             -w /github/workspace \
@@ -75,5 +77,4 @@ jobs:
             -e INPUT_R2PUBLICURL="${{ secrets.R2_PUBLIC_URL }}" \
             -e INPUT_GITHUBJOBURL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -e GITHUB_RUN_ID="${{ github.run_id }}" \
-            -e INPUT_WEBHOOKSECRET="${{ secrets.WEBHOOK_SECRET }}" \
             ghcr.io/swaplab-engine/cordova-build-engine:main
