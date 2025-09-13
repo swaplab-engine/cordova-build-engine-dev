@@ -27,6 +27,7 @@ jobs:
       # Langkah 3: Jalankan image privat Anda secara manual
       - name: Build Cordova Project via Secure Engine
         run: |
+          # PASTIKAN HANYA ADA SATU "docker run --rm" DI SINI
           docker run --rm \
             -v "${{ github.workspace }}:/github/workspace" \
             -w /github/workspace \
