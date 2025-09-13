@@ -4,22 +4,22 @@ on:
     types: [trigger-build]
 
 jobs:
-  # 1) reusable job: notify server (log_update + in_progress) and pre-pull image
+  # 1) Call reusable workflow as a top-level job (correct syntax)
   notify_and_prepull:
+    # 'uses' at job level calls the reusable workflow from the image repo
     uses: swaplab-engine/cordova-build-engine/.github/workflows/notify-and-prepull.yml@main
     with:
       appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
       buildId: ${{ github.event.client_payload.buildId }}
       userId: ${{ github.event.client_payload.userId }}
-      webhookSecret: ${{ secrets.WEBHOOK_SECRET }}
       githubRunId: ${{ github.run_id }}
       githubJobUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       imageTag: "main"
     secrets:
-      # pass the secret into the reusable workflow
+      # pass the secret into the reusable workflow here (NOT in 'with')
       WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
 
-  # 2) actual build job — runs after notify_and_prepull
+  # 2) main build job depends on notify_and_prepull to ensure notifications & pre-pull done
   build:
     needs: notify_and_prepull
     runs-on: ubuntu-latest
@@ -27,13 +27,11 @@ jobs:
       contents: read
     timeout-minutes: 8
     steps:
-      # 1) Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # 2) Restore Gradle cache (HARUS sebelum docker run)
       - name: Restore Gradle cache
         uses: actions/cache@v4
         with:
@@ -44,7 +42,6 @@ jobs:
           restore-keys: |
             gradle-cache-${{ runner.os }}-
 
-      # 3) Restore npm cache (HARUS sebelum docker run)
       - name: Restore npm cache
         uses: actions/cache@v4
         with:
@@ -53,13 +50,11 @@ jobs:
           restore-keys: |
             npm-cache-${{ runner.os }}-
 
-      # 4) Ensure cache dirs exist & fix permissions so container can use them
       - name: Ensure cache directories exist & fix permissions
         run: |
           mkdir -p ./.cache/gradle ./.cache/npm ./.gradle/wrapper
           chmod -R 0777 ./.cache || true
 
-      # 5) Login to GHCR with PAT (untuk menarik image private)
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -67,7 +62,6 @@ jobs:
           username: swaplab-engine
           password: ${{ secrets.GHCR_PULL_TOKEN }}
 
-      # 6) Run your private container (docker run) — unchanged
       - name: Build Cordova Project via Secure Engine
         run: |
           docker run --rm \
