@@ -23,7 +23,6 @@ jobs:
           path: |
             ./.cache/gradle
             ./.gradle/wrapper
-          # kunci sederhana dan aman; hindari hashFiles() error di repo Anda
           key: gradle-cache-${{ runner.os }}-${{ github.ref_name }}
           restore-keys: |
             gradle-cache-${{ runner.os }}-
@@ -42,6 +41,29 @@ jobs:
         run: |
           mkdir -p ./.cache/gradle ./.cache/npm ./.gradle/wrapper
           chmod -R 0777 ./.cache || true
+
+      # --- NEW STEP: Notify server immediately that build is in_progress ---
+      - name: Notify server (in_progress)
+        shell: bash
+        env:
+          APP_BASE_URL: ${{ github.event.client_payload.appBaseUrl }}
+          BUILD_ID: ${{ github.event.client_payload.buildId }}
+          USER_ID: ${{ github.event.client_payload.userId }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD=$(printf '%s' '{"buildId":"%s","userId":"%s","status":"in_progress","ciProvider":"github","runId":"%s","githubJobUrl":"%s"}' "$BUILD_ID" "$USER_ID" "${{ github.run_id }}" "$RUN_URL")
+          curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Build-Secret: ${WEBHOOK_SECRET}" \
+            -d "$PAYLOAD" \
+            "${APP_BASE_URL}/api/github-webhook" || true
+
+      # --- NEW STEP: Pre-pull image to reduce docker run delay (optional but recommended) ---
+      - name: Pre-pull Cordova Build Engine image
+        run: |
+          docker pull ghcr.io/swaplab-engine/cordova-build-engine:main || true
 
       # 5) Login to GHCR with PAT (untuk menarik image private)
       - name: Log in to GitHub Container Registry
@@ -74,4 +96,5 @@ jobs:
             -e INPUT_R2PUBLICURL="${{ secrets.R2_PUBLIC_URL }}" \
             -e INPUT_GITHUBJOBURL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -e GITHUB_RUN_ID="${{ github.run_id }}" \
+            -e SKIP_ENTRYPOINT_IN_PROGRESS=true \
             ghcr.io/swaplab-engine/cordova-build-engine:main
