@@ -53,12 +53,15 @@ jobs:
         run: |
           set -euo pipefail
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          PAYLOAD=$(printf '%s' '{"buildId":"%s","userId":"%s","status":"in_progress","ciProvider":"github","runId":"%s","githubJobUrl":"%s"}' "$BUILD_ID" "$USER_ID" "${{ github.run_id }}" "$RUN_URL")
-          curl -sS -X POST \
+          # Correct printf usage: format string with %s placeholders (no leading '%s')
+          PAYLOAD=$(printf '{"buildId":"%s","userId":"%s","status":"in_progress","ciProvider":"github","runId":"%s","githubJobUrl":"%s"}' \
+            "$BUILD_ID" "$USER_ID" "${{ github.run_id }}" "$RUN_URL")
+          HTTP_CODE=$(curl -sS -w "%{http_code}" -X POST \
             -H "Content-Type: application/json" \
             -H "X-Build-Secret: ${WEBHOOK_SECRET}" \
             -d "$PAYLOAD" \
-            "${APP_BASE_URL}/api/github-webhook" || true
+            "${APP_BASE_URL}/api/github-webhook" || echo "000")
+          echo "Notify server response HTTP_CODE=${HTTP_CODE}" || true
 
       # --- NEW STEP: Pre-pull image to reduce docker run delay (optional but recommended) ---
       - name: Pre-pull Cordova Build Engine image
