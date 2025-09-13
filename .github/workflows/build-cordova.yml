@@ -46,6 +46,6 @@ jobs:
             -e INPUT_R2BUCKETNAME="${{ secrets.R2_BUCKET_NAME }}" \
             -e INPUT_R2PUBLICURL="${{ secrets.R2_PUBLIC_URL }}" \
             -e INPUT_GITHUBJOBURL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -e GITHUB_RUN_ID="${{ github.run_id }}" \
             ghcr.io/swaplab-engine/cordova-build-engine:main
-         
           
