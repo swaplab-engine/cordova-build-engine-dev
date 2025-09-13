@@ -1,3 +1,5 @@
+# .github/workflows/cordova-build.yml
+
 name: Cordova Build
 on:
   repository_dispatch:
@@ -9,50 +11,19 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 8
-
     steps:
+      # Langkah 1: Checkout kode (diperlukan untuk workspace)
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          # fetch full history is not necessary usually, but keep shallow by default
-          fetch-depth: 1
 
-      # -------------------------
-      # Restore caches (SAFE keys, no hashFiles)
-      # -------------------------
-      - name: Restore Gradle cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ./.cache/gradle
-            ./.gradle/wrapper
-          # simple key based on OS + branch (safe; avoids hashFiles parsing errors)
-          key: gradle-cache-${{ runner.os }}-${{ github.ref_name }}
-          restore-keys: |
-            gradle-cache-${{ runner.os }}-
-
-      - name: Restore npm cache
-        uses: actions/cache@v4
-        with:
-          path: ./.cache/npm
-          key: npm-cache-${{ runner.os }}-${{ github.ref_name }}
-          restore-keys: |
-            npm-cache-${{ runner.os }}-
-
-      - name: Ensure cache directories exist & fix permissions
-        run: |
-          mkdir -p ./.cache/gradle ./.cache/npm ./.gradle/wrapper
-          chmod -R 0777 ./.cache || true
-
-      # Login to GHCR (untuk menarik image private)
+      # Langkah 2: Login ke GHCR dengan PAT
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: swaplab-engine
-          password: ${{ secrets.GHCR_PULL_TOKEN }}
-
-      # Run your private container
+          password: ${{ secrets.GHCR_PULL_TOKEN }} # PAT yang Anda sediakan
+      
       # Langkah 3: Jalankan image privat Anda secara manual
       - name: Build Cordova Project via Secure Engine
         run: |
@@ -78,3 +49,4 @@ jobs:
             -e INPUT_GITHUBJOBURL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -e GITHUB_RUN_ID="${{ github.run_id }}" \
             ghcr.io/swaplab-engine/cordova-build-engine:main
+          
