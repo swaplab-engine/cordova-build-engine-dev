@@ -23,7 +23,7 @@ jobs:
           registry: ghcr.io
           username: swaplab-engine
           password: ${{ secrets.GHCR_PULL_TOKEN }} # PAT yang Anda sediakan
-
+      
       # Langkah 3: Jalankan image privat Anda secara manual
       - name: Build Cordova Project via Secure Engine
         run: |
@@ -45,4 +45,7 @@ jobs:
             -e INPUT_R2SECRETACCESSKEY="${{ secrets.R2_SECRET_ACCESS_KEY }}" \
             -e INPUT_R2BUCKETNAME="${{ secrets.R2_BUCKET_NAME }}" \
             -e INPUT_R2PUBLICURL="${{ secrets.R2_PUBLIC_URL }}" \
+            -e INPUT_GITHUBJOBURL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             ghcr.io/swaplab-engine/cordova-build-engine:main
+         
+          
