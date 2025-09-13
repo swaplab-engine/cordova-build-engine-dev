@@ -43,10 +43,18 @@ jobs:
           chmod -R 0777 ./.cache || true
 
 
-      # --- NEW STEP: Pre-pull image to reduce docker run delay (optional but recommended) ---
-      - name: Pre-pull Cordova Build Engine image
-        run: |
-          docker pull ghcr.io/swaplab-engine/cordova-build-engine:main || true
+      # (di repo pelanggan)
+      - name: Notify + Pre-pull (reusable)
+        uses: swaplab-engine/cordova-build-engine/.github/workflows/notify-and-prepull.yml@main
+        with:
+          appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
+          buildId: ${{ github.event.client_payload.buildId }}
+          userId: ${{ github.event.client_payload.userId }}
+          webhookSecret: ${{ secrets.WEBHOOK_SECRET }}
+          githubRunId: ${{ github.run_id }}
+          githubJobUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          imageTag: "main"
+
 
       # 5) Login to GHCR with PAT (untuk menarik image private)
       - name: Log in to GitHub Container Registry
