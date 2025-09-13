@@ -1,5 +1,3 @@
-# .github/workflows/cordova-build.yml
-
 name: Cordova Build
 on:
   repository_dispatch:
@@ -12,22 +10,50 @@ jobs:
       contents: read
     timeout-minutes: 8
     steps:
-      # Langkah 1: Checkout kode (diperlukan untuk workspace)
+      # 1) Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      # Langkah 2: Login ke GHCR dengan PAT
+      # 2) Restore Gradle cache (HARUS sebelum docker run)
+      - name: Restore Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ./.cache/gradle
+            ./.gradle/wrapper
+          # kunci sederhana dan aman; hindari hashFiles() error di repo Anda
+          key: gradle-cache-${{ runner.os }}-${{ github.ref_name }}
+          restore-keys: |
+            gradle-cache-${{ runner.os }}-
+
+      # 3) Restore npm cache (HARUS sebelum docker run)
+      - name: Restore npm cache
+        uses: actions/cache@v4
+        with:
+          path: ./.cache/npm
+          key: npm-cache-${{ runner.os }}-${{ github.ref_name }}
+          restore-keys: |
+            npm-cache-${{ runner.os }}-
+
+      # 4) Ensure cache dirs exist & fix permissions so container can use them
+      - name: Ensure cache directories exist & fix permissions
+        run: |
+          mkdir -p ./.cache/gradle ./.cache/npm ./.gradle/wrapper
+          chmod -R 0777 ./.cache || true
+
+      # 5) Login to GHCR with PAT (untuk menarik image private)
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: swaplab-engine
-          password: ${{ secrets.GHCR_PULL_TOKEN }} # PAT yang Anda sediakan
-      
-      # Langkah 3: Jalankan image privat Anda secara manual
+          password: ${{ secrets.GHCR_PULL_TOKEN }}
+
+      # 6) Run your private container (docker run)
       - name: Build Cordova Project via Secure Engine
         run: |
-          # PASTIKAN HANYA ADA SATU "docker run --rm" DI SINI
           docker run --rm \
             -v "${{ github.workspace }}:/github/workspace" \
             -w /github/workspace \
@@ -49,4 +75,3 @@ jobs:
             -e INPUT_GITHUBJOBURL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -e GITHUB_RUN_ID="${{ github.run_id }}" \
             ghcr.io/swaplab-engine/cordova-build-engine:main
-          
