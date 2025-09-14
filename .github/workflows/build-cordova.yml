@@ -1,20 +1,27 @@
+# File .github/workflows/build.yml di repositori pelanggan (FINAL & BENAR)
+
 name: Cordova Build
 on:
   repository_dispatch:
     types: [trigger-build]
 
 jobs:
+  # Job 1: Kirim notifikasi cepat dan siapkan image Docker
   notify_and_prepull:
-    uses: swaplab-engine/cordova-build-engine/.github/workflows/notify-and-prepull.yml@main
-    with:
-      appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
-      buildId: ${{ github.event.client_payload.buildId }}
-      githubRunId: ${{ github.run_id }}
-      githubJobUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      imageTag: "main"
-    secrets:
-      BUILD_TOKEN: ${{ github.event.client_payload.buildToken }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Server and Pre-pull Image
+        uses: swaplab-engine/cordova-build-engine/.github/workflows/notify-and-prepull.yml@main
+        with:
+          appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
+          buildId: ${{ github.event.client_payload.buildId }}
+          userId: ${{ github.event.client_payload.userId }}
+          githubRunId: ${{ github.run_id }}
+          githubJobUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        secrets: # <-- Indentasi sudah diperbaiki
+          BUILD_TOKEN: ${{ github.event.client_payload.buildToken }}
 
+  # Job 2: Lakukan build setelah notifikasi terkirim dan image siap
   build:
     needs: notify_and_prepull
     runs-on: ubuntu-latest
@@ -24,8 +31,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
       - name: Restore Gradle cache
         uses: actions/cache@v4
@@ -33,7 +38,7 @@ jobs:
           path: |
             ./.cache/gradle
             ./.gradle/wrapper
-          key: gradle-cache-${{ runner.os }}-${{ github.ref_name }}
+          key: gradle-cache-${{ runner.os }}-${{ hashFiles('**/build.gradle*') }}
           restore-keys: |
             gradle-cache-${{ runner.os }}-
 
@@ -41,15 +46,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ./.cache/npm
-          key: npm-cache-${{ runner.os }}-${{ github.ref_name }}
+          key: npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             npm-cache-${{ runner.os }}-
-
-      - name: Ensure cache directories exist & fix permissions
-        run: |
-          mkdir -p ./.cache/gradle ./.cache/npm ./.gradle/wrapper
-          chmod -R 0777 ./.cache || true
-
+      
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
