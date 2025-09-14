@@ -78,6 +78,7 @@ jobs:
             -e INPUT_R2SECRETACCESSKEY="${{ secrets.R2_SECRET_ACCESS_KEY }}" \
             -e INPUT_R2BUCKETNAME="${{ secrets.R2_BUCKET_NAME }}" \
             -e INPUT_R2PUBLICURL="${{ secrets.R2_PUBLIC_URL }}" \
+            -e INPUT_BUILDTOKEN="${{ github.event.client_payload.buildToken }}" \
             -e INPUT_GITHUBJOBURL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -e GITHUB_RUN_ID="${{ github.run_id }}" \
             -e SKIP_ENTRYPOINT_IN_PROGRESS=true \
