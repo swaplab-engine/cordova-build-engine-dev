@@ -4,20 +4,8 @@ on:
     types: [trigger-build]
 
 jobs:
-  notify_and_prepull:
-    uses: swaplab-engine/cordova-build-engine/.github/workflows/notify-and-prepull.yml@main
-    with:
-      appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
-      buildId: ${{ github.event.client_payload.buildId }}
-      userId: ${{ github.event.client_payload.userId }}
-      githubRunId: ${{ github.run_id }}
-      githubJobUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      imageTag: "main"
-    secrets:
-      BUILD_TOKEN: ${{ github.event.client_payload.buildToken }}
-
+  
   build:
-    needs: notify_and_prepull
     runs-on: ubuntu-latest
     permissions:
       contents: read
