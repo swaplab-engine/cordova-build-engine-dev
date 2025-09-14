@@ -9,7 +9,6 @@ jobs:
     with:
       appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
       buildId: ${{ github.event.client_payload.buildId }}
-      userId: ${{ github.event.client_payload.userId }}
       githubRunId: ${{ github.run_id }}
       githubJobUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       imageTag: "main"
