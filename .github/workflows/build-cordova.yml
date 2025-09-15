@@ -8,25 +8,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 20
+    timeout-minutes: 8
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Compute project fingerprint (for cache key)
-        id: proj_hash
-        run: |
-          set -euo pipefail
-          echo "Downloading project ZIP for fingerprint..."
-          curl -sL "${{ github.event.client_payload.projectUrl }}" -o /tmp/project.zip
-          sha=$(sha1sum /tmp/project.zip | awk '{print $1}')
-          echo "project_sha=${sha}" >> "$GITHUB_OUTPUT"
-          echo "Computed project SHA: $sha"
-
-      - name: Print computed cache keys (debug)
-        run: |
-          echo "Gradle key: gradle-cache-${{ runner.os }}-gradle-${{ steps.proj_hash.outputs.project_sha }}"
-          echo "NPM key: npm-cache-${{ runner.os }}-${{ steps.proj_hash.outputs.project_sha }}"
 
       - name: Restore Gradle cache
         uses: actions/cache@v4
@@ -34,19 +19,24 @@ jobs:
           path: |
             ./.cache/gradle
             ./.gradle/wrapper
-          key: gradle-cache-${{ runner.os }}-gradle-${{ steps.proj_hash.outputs.project_sha }}
+          key: gradle-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
-            gradle-cache-${{ runner.os }}-gradle-
-
-    
+            gradle-cache-${{ runner.os }}-
 
       - name: Restore npm cache
         uses: actions/cache@v4
         with:
           path: ./.cache/npm
-          key: npm-cache-${{ runner.os }}-${{ steps.proj_hash.outputs.project_sha }}
+          key: npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             npm-cache-${{ runner.os }}-
+
+      - name: Show cache sizes (quick check)
+        run: |
+          echo "Gradle cache size (./.cache/gradle):"
+          du -sh ./.cache/gradle || true
+          echo "NPM cache size (./.cache/npm):"
+          du -sh ./.cache/npm || true
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -61,11 +51,3 @@ jobs:
           appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
           buildId: ${{ github.event.client_payload.buildId }}
           buildToken: ${{ github.event.client_payload.buildToken }}
-
-      - name: Debug: show gradle cache AFTER build
-        if: always()
-        run: |
-          echo "ls -la ./.cache/gradle || true"
-          ls -la ./.cache/gradle || true
-          echo "du -sh ./.cache/gradle || true"
-          du -sh ./.cache/gradle || true
