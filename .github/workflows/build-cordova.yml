@@ -33,12 +33,12 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: swaplab-engine # Ganti dengan username Anda jika berbeda
-          password: ${{ secrets.GHCR_PULL_TOKEN }}
+          username: ${{ github.actor }} # Menggunakan github.actor lebih fleksibel
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Cordova Project via Secure Engine
-        id: build_step # Menambahkan id pada langkah ini
-        uses: ./ # Menggunakan action dari repo lokal
+        # FIX: Mengembalikan ke referensi repositori yang benar, bukan path lokal
+        uses: swaplab-engine/cordova-build-engine@main
         with:
           appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
           buildId: ${{ github.event.client_payload.buildId }}
