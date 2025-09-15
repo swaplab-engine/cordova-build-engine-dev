@@ -53,10 +53,4 @@ jobs:
           buildId: ${{ github.event.client_payload.buildId }}
           buildToken: ${{ github.event.client_payload.buildToken }}
 
-      - name: Debug: show gradle cache AFTER build
-        if: always()
-        run: |
-          echo "ls -la ./.cache/gradle || true"
-          ls -la ./.cache/gradle || true
-          echo "du -sh ./.cache/gradle || true"
-          du -sh ./.cache/gradle || true
+     
