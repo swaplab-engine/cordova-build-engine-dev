@@ -30,12 +30,6 @@ jobs:
           restore-keys: |
             gradle-cache-${{ runner.os }}-gradle-
 
-      - name: Debug: show gradle cache BEFORE build
-        run: |
-          echo "ls -la ./.cache/gradle || true"
-          ls -la ./.cache/gradle || true
-          echo "du -sh ./.cache/gradle || true"
-          du -sh ./.cache/gradle || true
 
       - name: Restore npm cache
         uses: actions/cache@v4
