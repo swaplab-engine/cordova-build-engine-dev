@@ -33,12 +33,19 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: swaplab-engine
+          username: swaplab-engine # Ganti dengan username Anda jika berbeda
           password: ${{ secrets.GHCR_PULL_TOKEN }}
 
       - name: Build Cordova Project via Secure Engine
-        uses: swaplab-engine/cordova-build-engine@main
+        id: build_step # Menambahkan id pada langkah ini
+        uses: ./ # Menggunakan action dari repo lokal
         with:
           appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
           buildId: ${{ github.event.client_payload.buildId }}
           buildToken: ${{ github.event.client_payload.buildToken }}
+
+      # Langkah ini berjalan setelah langkah build, baik sukses maupun gagal
+      - name: Fix Cache Permissions
+        if: always() # Pastikan langkah ini selalu berjalan
+        run: |
+          sudo chown -R $(whoami) ./.gradle ./.cache/npm
