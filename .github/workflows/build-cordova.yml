@@ -13,15 +13,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Restore Gradle cache
+      - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
-          path: |
-            ./.cache/gradle
-            ./.gradle/wrapper
-          key: gradle-cache-${{ runner.os }}-${{ hashFiles('**/build.gradle*') }}
+          path: ./.gradle
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/gradle-wrapper.properties') }}
           restore-keys: |
-            gradle-cache-${{ runner.os }}-
+            ${{ runner.os }}-gradle-
 
       - name: Restore npm cache
         uses: actions/cache@v4
