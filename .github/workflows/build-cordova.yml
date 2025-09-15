@@ -13,15 +13,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Print computed cache keys (debug)
+        run: |
+          echo "Computed gradle cache key:"
+          echo "gradle-cache-${{ runner.os }}-gradle-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties','**/platforms/android/**/build.gradle*','**/package-lock.json') }}"
+          echo "Computed npm cache key:"
+          echo "npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}"
+
       - name: Restore Gradle cache
         uses: actions/cache@v4
         with:
           path: |
             ./.cache/gradle
             ./.gradle/wrapper
-          key: gradle-cache-${{ runner.os }}-${{ hashFiles('**/build.gradle*') }}
+          key: gradle-cache-${{ runner.os }}-gradle-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties','**/platforms/android/**/build.gradle*','**/package-lock.json') }}
           restore-keys: |
-            gradle-cache-${{ runner.os }}-
+            gradle-cache-${{ runner.os }}-gradle-
+
+      - name: Debug: show gradle cache BEFORE build
+        run: |
+          echo "ls -la ./.cache/gradle || true"
+          ls -la ./.cache/gradle || true
+          echo "du -sh ./.cache/gradle || true"
+          du -sh ./.cache/gradle || true
 
       - name: Restore npm cache
         uses: actions/cache@v4
@@ -30,7 +44,7 @@ jobs:
           key: npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             npm-cache-${{ runner.os }}-
-      
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -44,3 +58,11 @@ jobs:
           appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
           buildId: ${{ github.event.client_payload.buildId }}
           buildToken: ${{ github.event.client_payload.buildToken }}
+
+      - name: Debug: show gradle cache AFTER build
+        if: always()
+        run: |
+          echo "ls -la ./.cache/gradle || true"
+          ls -la ./.cache/gradle || true
+          echo "du -sh ./.cache/gradle || true"
+          du -sh ./.cache/gradle || true
