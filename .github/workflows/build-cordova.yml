@@ -10,16 +10,6 @@ jobs:
       contents: read
     timeout-minutes: 8
     steps:
-      # --- TAMBAHKAN LANGKAH CACHE DI SINI ---
-      - name: Cache dependencies (npm and gradle)
-        uses: actions/cache@v4
-        with:
-          path: .cache
-          # Ganti dengan kunci statis. 'v1' bisa Anda ubah menjadi 'v2' nanti
-          # jika Anda ingin membuat cache baru dari awal.
-          key: ${{ runner.os }}-cordova-deps-v1
-          restore-keys: |
-            ${{ runner.os }}-cordova-deps-
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
