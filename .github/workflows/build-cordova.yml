@@ -10,33 +10,18 @@ jobs:
       contents: read
     timeout-minutes: 8
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Restore Gradle cache
+      # --- TAMBAHKAN LANGKAH CACHE DI SINI ---
+      - name: Cache dependencies (npm and gradle)
         uses: actions/cache@v4
         with:
-          path: |
-            ./.cache/gradle
-            ./.gradle/wrapper
-          key: gradle-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          # Path yang akan di-cache, sesuai dengan yang Anda siapkan di entrypoint.sh
+          path: .cache
+          # Kunci unik untuk cache. Cache hanya akan dipulihkan jika kunci ini sama persis.
+          # Jika package-lock.json berubah, kunci akan berubah dan cache baru dibuat.
+          key: ${{ runner.os }}-cordova-${{ hashFiles('**/package-lock.json') }}
+          # Kunci cadangan jika tidak ada cache yang cocok persis.
           restore-keys: |
-            gradle-cache-${{ runner.os }}-
-
-      - name: Restore npm cache
-        uses: actions/cache@v4
-        with:
-          path: ./.cache/npm
-          key: npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            npm-cache-${{ runner.os }}-
-
-      - name: Show cache sizes (quick check)
-        run: |
-          echo "Gradle cache size (./.cache/gradle):"
-          du -sh ./.cache/gradle || true
-          echo "NPM cache size (./.cache/npm):"
-          du -sh ./.cache/npm || true
+            ${{ runner.os }}-cordova-
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
