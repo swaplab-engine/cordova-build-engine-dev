@@ -8,17 +8,25 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 8
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Compute project fingerprint (for cache key)
+        id: proj_hash
+        run: |
+          set -euo pipefail
+          echo "Downloading project ZIP for fingerprint..."
+          curl -sL "${{ github.event.client_payload.projectUrl }}" -o /tmp/project.zip
+          sha=$(sha1sum /tmp/project.zip | awk '{print $1}')
+          echo "project_sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "Computed project SHA: $sha"
+
       - name: Print computed cache keys (debug)
         run: |
-          echo "Computed gradle cache key:"
-          echo "gradle-cache-${{ runner.os }}-gradle-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties','**/platforms/android/**/build.gradle*','**/package-lock.json') }}"
-          echo "Computed npm cache key:"
-          echo "npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}"
+          echo "Gradle key: gradle-cache-${{ runner.os }}-gradle-${{ steps.proj_hash.outputs.project_sha }}"
+          echo "NPM key: npm-cache-${{ runner.os }}-${{ steps.proj_hash.outputs.project_sha }}"
 
       - name: Restore Gradle cache
         uses: actions/cache@v4
@@ -26,16 +34,22 @@ jobs:
           path: |
             ./.cache/gradle
             ./.gradle/wrapper
-          key: gradle-cache-${{ runner.os }}-gradle-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties','**/platforms/android/**/build.gradle*','**/package-lock.json') }}
+          key: gradle-cache-${{ runner.os }}-gradle-${{ steps.proj_hash.outputs.project_sha }}
           restore-keys: |
             gradle-cache-${{ runner.os }}-gradle-
 
+      - name: Debug: show gradle cache BEFORE build
+        run: |
+          echo "ls -la ./.cache/gradle || true"
+          ls -la ./.cache/gradle || true
+          echo "du -sh ./.cache/gradle || true"
+          du -sh ./.cache/gradle || true
 
       - name: Restore npm cache
         uses: actions/cache@v4
         with:
           path: ./.cache/npm
-          key: npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          key: npm-cache-${{ runner.os }}-${{ steps.proj_hash.outputs.project_sha }}
           restore-keys: |
             npm-cache-${{ runner.os }}-
 
@@ -53,4 +67,10 @@ jobs:
           buildId: ${{ github.event.client_payload.buildId }}
           buildToken: ${{ github.event.client_payload.buildToken }}
 
-     
+      - name: Debug: show gradle cache AFTER build
+        if: always()
+        run: |
+          echo "ls -la ./.cache/gradle || true"
+          ls -la ./.cache/gradle || true
+          echo "du -sh ./.cache/gradle || true"
+          du -sh ./.cache/gradle || true
