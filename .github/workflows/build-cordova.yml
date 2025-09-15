@@ -10,7 +10,27 @@ jobs:
       contents: read
     timeout-minutes: 8
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      - name: Restore Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ./.cache/gradle
+            ./.gradle/wrapper
+          key: gradle-cache-${{ runner.os }}-${{ hashFiles('**/build.gradle*') }}
+          restore-keys: |
+            gradle-cache-${{ runner.os }}-
+
+      - name: Restore npm cache
+        uses: actions/cache@v4
+        with:
+          path: ./.cache/npm
+          key: npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            npm-cache-${{ runner.os }}-
+      
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
