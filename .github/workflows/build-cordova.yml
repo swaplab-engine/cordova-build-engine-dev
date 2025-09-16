@@ -1,51 +1,65 @@
-name: Cordova Build
+# Nama file: .github/workflows/cordova-build.yml
+# Versi Final Profesional (Tanpa Secret Manual)
+
+name: Cordova Build Service
+
 on:
-  repository_dispatch:
-    types: [trigger-build]
+  workflow_dispatch:
+    inputs:
+      appBaseUrl:
+        required: true
+      buildId:
+        required: true
+      buildToken:
+        required: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 8
+      packages: read
+
     steps:
-      - name: Checkout repository
+      # Langkah 1 (BARU): Meminta token sementara dari server Anda
+      - name: Get Temporary Checkout Token
+        id: get_token
+        run: |
+          TOKEN_JSON=$(curl -sS -f -X POST \
+            -H "Authorization: Bearer ${{ github.event.inputs.buildToken }}" \
+            -H "Content-Type: application/json" \
+            -d '{"buildId": "${{ github.event.inputs.buildId }}"}' \
+            "${{ github.event.inputs.appBaseUrl }}/api/github/get-checkout-token")
+          
+          TEMP_TOKEN=$(echo $TOKEN_JSON | jq -r '.token')
+          
+          if [ -z "$TEMP_TOKEN" ] || [ "$TEMP_TOKEN" == "null" ]; then
+            echo "::error::Failed to retrieve a temporary checkout token from the build server."
+            exit 1
+          fi
+          
+          echo "token=${TEMP_TOKEN}" >> $GITHUB_OUTPUT
+
+      # Langkah 2: Checkout repositori privat menggunakan token sementara
+      - name: Checkout Private Build Engine
         uses: actions/checkout@v4
-
-      - name: Cache Gradle packages
-        uses: actions/cache@v4
         with:
-          path: ./.gradle
-          key: ${{ runner.os }}-gradle-cache-v1
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+          repository: swaplab-engine/cordova-build-engine
+          token: ${{ steps.get_token.outputs.token }} # Menggunakan token dari langkah sebelumnya
+          path: '.github/actions/build-engine'
 
-      - name: Restore npm cache
-        uses: actions/cache@v4
-        with:
-          path: ./.cache/npm
-          key: npm-cache-${{ runner.os }}-v1
-          restore-keys: |
-            npm-cache-${{ runner.os }}-
-      
+      # Langkah 3: Login ke GHCR (tetap sama)
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }} # Menggunakan github.actor lebih fleksibel
+          username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Langkah 4: Jalankan action dari path lokal (tetap sama)
       - name: Build Cordova Project via Secure Engine
-        # FIX: Mengembalikan ke referensi repositori yang benar, bukan path lokal
-        uses: swaplab-engine/cordova-build-engine@main
+        uses: ./.github/actions/build-engine
         with:
-          appBaseUrl: ${{ github.event.client_payload.appBaseUrl }}
-          buildId: ${{ github.event.client_payload.buildId }}
-          buildToken: ${{ github.event.client_payload.buildToken }}
-
-      # Langkah ini berjalan setelah langkah build, baik sukses maupun gagal
-      - name: Fix Cache Permissions
-        if: always() # Pastikan langkah ini selalu berjalan
-        run: |
-          sudo chown -R $(whoami) ./.gradle ./.cache/npm
+          appBaseUrl: ${{ github.event.inputs.appBaseUrl }}
+          buildId: ${{ github.event.inputs.buildId }}
+          buildToken: ${{ github.event.inputs.buildToken }}
