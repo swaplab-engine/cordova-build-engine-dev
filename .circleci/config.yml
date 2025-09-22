@@ -1,4 +1,4 @@
-# Nama file: .circleci/config.yml (Versi Final)
+# Nama file: .circleci/config.yml (Versi Final dengan Kontrol Pemicu)
 version: 2.1
 
 parameters:
@@ -14,65 +14,42 @@ parameters:
 
 jobs:
   build:
-    # --- [PERUBAHAN 1] ---
-    # Mengganti executor dari 'machine' ke 'docker'
     docker:
-      - image: cimg/base:stable # Menggunakan image dasar dari CircleCI
-
+      - image: cimg/base:stable
     resource_class: medium
     steps:
-      # Langkah 1: Siapkan lingkungan Docker terpisah dengan caching
       - setup_remote_docker:
           docker_layer_caching: true
-
-      # --- [PERUBAHAN 2] ---
-      # Instalasi perangkat yang dibutuhkan (jq untuk JSON & aws-cli untuk ECR)
-      # karena cimg/base tidak memilikinya secara default.
       - run:
           name: Install Dependencies (jq, aws-cli)
           command: |
-            sudo apt-get update
-            sudo apt-get install -y jq
-            
+            sudo apt-get update && sudo apt-get install -y jq
             curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
             unzip awscliv2.zip
             sudo ./aws/install
-
-      # Langkah 2: Minta token ECR jangka pendek dari server Anda
       - run:
           name: Request short-lived ECR token
           command: |
-            # ... (Skrip Anda di sini tidak berubah) ...
+            # ... Skrip Anda tidak berubah ...
             JSON_RESPONSE=$(curl -s -f -X POST \
               -H "Content-Type: application/json" \
               -d '{"buildId": "<< pipeline.parameters.buildId >>", "buildToken": "<< pipeline.parameters.buildToken >>"}' \
               "<< pipeline.parameters.appBaseUrl >>/api/request-ecr-token")
-            
             ECR_TOKEN=$(echo $JSON_RESPONSE | jq -r .ecrToken)
             REGISTRY_URI=$(echo $JSON_RESPONSE | jq -r .registryUri | sed 's|https://||')
-
-            if [ -z "$ECR_TOKEN" ] || [ "$ECR_TOKEN" == "null" ]; then
-              echo "Failed to retrieve a valid ECR token."
-              exit 1
-            fi
-            
-            echo "Successfully retrieved ECR token."
+            if [ -z "$ECR_TOKEN" ] || [ "$ECR_TOKEN" == "null" ]; then exit 1; fi
             echo "export ECR_TOKEN='$ECR_TOKEN'" >> $BASH_ENV
             echo "export REGISTRY_URI='$REGISTRY_URI'" >> $BASH_ENV
-
-      # Langkah 3: Login ke ECR menggunakan token dinamis
       - run:
           name: Log in to Amazon ECR
           command: |
-            # ... (Skrip Anda di sini tidak berubah) ...
+            # ... Skrip Anda tidak berubah ...
             source $BASH_ENV
             echo $ECR_TOKEN | base64 --decode | docker login --username AWS --password-stdin $REGISTRY_URI
-
-      # Langkah 4: Jalankan Build Engine
       - run:
           name: Build Cordova Project via Secure Engine
           command: |
-            # ... (Skrip Anda di sini tidak berubah) ...
+            # ... Skrip Anda tidak berubah ...
             source $BASH_ENV
             docker run --rm \
               -e INPUT_APPBASEURL="<< pipeline.parameters.appBaseUrl >>" \
@@ -85,5 +62,9 @@ jobs:
 
 workflows:
   build_app:
+    # --- [PERUBAHAN] ---
+    # Kondisi ini memastikan workflow HANYA berjalan jika parameter 'buildId' diberikan,
+    # yang berarti hanya saat dipicu oleh API dari server.js Anda.
+    when: << pipeline.parameters.buildId >>
     jobs:
       - build
