@@ -17,19 +17,10 @@ jobs:
   build:
     # Menggunakan machine executor dengan image Ubuntu LTS yang sudah termasuk Docker.
     machine:
-      image: ubuntu-2204:current
+      image: swaplab/circleci-worker:latest
     
     steps:
       - checkout
-
-      # Memasang perangkat lunak yang dibutuhkan.
-      - aws-cli/setup
-      - run:
-          name: Install JQ
-          command: |
-            sudo apt-get update && sudo apt-get install -y jq
-            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-            unzip awscliv2.zip && sudo ./aws/install
 
       # Memulihkan cache Docker dari build sebelumnya.
       - restore_cache:
