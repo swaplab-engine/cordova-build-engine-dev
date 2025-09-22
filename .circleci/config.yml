@@ -34,14 +34,9 @@ jobs:
               -e INPUT_APPBASEURL="<< pipeline.parameters.appBaseUrl >>" \
               -e INPUT_BUILDID="<< pipeline.parameters.buildId >>" \
               -e INPUT_BUILDTOKEN="<< pipeline.parameters.buildToken >>" \
-              \
-              # --- [MANIPULASI LINGKUNGAN] ---
-              # "Menipu" entrypoint.sh agar mengira ini adalah lingkungan GitHub Actions.
-              # Menyediakan variabel yang dibutuhkan oleh skrip tanpa mengubah skrip itu sendiri.
               -e GITHUB_SERVER_URL="https://github.com" \
               -e GITHUB_REPOSITORY="$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME" \
               -e GITHUB_RUN_ID=$CIRCLE_WORKFLOW_ID \
-              \
               $REGISTRY_URI/swaplab/cordova-build-engine:main
 
 workflows:
