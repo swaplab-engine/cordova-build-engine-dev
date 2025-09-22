@@ -71,6 +71,7 @@ jobs:
 
 workflows:
   build_app:
+    # Kondisi 'when' sekarang harus memeriksa 'userId' juga atau 'buildId' saja sudah cukup
     when: << pipeline.parameters.buildId >>
     jobs:
       - build
