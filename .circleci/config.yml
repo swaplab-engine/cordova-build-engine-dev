@@ -11,8 +11,7 @@ parameters:
   buildToken:
     type: string
     default: ""
-
-    userId:
+  userId:
     type: string
     default: ""
 
