@@ -59,11 +59,7 @@ jobs:
               -e INPUT_APPBASEURL="<< pipeline.parameters.appBaseUrl >>" \
               -e INPUT_BUILDID="<< pipeline.parameters.buildId >>" \
               -e INPUT_BUILDTOKEN="<< pipeline.parameters.buildToken >>" \
-              \
-              # --- [PERUBAHAN 2] ---
-              # Tambahkan baris ini untuk meneruskan userId ke dalam kontainer
               -e INPUT_USERID="<< pipeline.parameters.userId >>" \
-              \
               -e CI_PROVIDER="circleci" \
               -e CIRCLE_WORKFLOW_ID=$CIRCLE_WORKFLOW_ID \
               -e CIRCLE_PROJECT_REPONAME=$CIRCLE_PROJECT_REPONAME \
@@ -71,7 +67,6 @@ jobs:
 
 workflows:
   build_app:
-    # Kondisi 'when' sekarang harus memeriksa 'userId' juga atau 'buildId' saja sudah cukup
     when: << pipeline.parameters.buildId >>
     jobs:
       - build
