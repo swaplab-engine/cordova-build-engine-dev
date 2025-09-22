@@ -1,271 +1,69 @@
+# Nama file: .circleci/config.yml (Versi Dinamis & Aman)
 version: 2.1
 
-orbs:
-  aws-cli: circleci/aws-cli@4.1
-
 parameters:
-  userId:
-    type: string
-    default: ""
-  buildId:
-    type: string
-    default: ""
-  projectUrl:
-    type: string
-    default: ""
   appBaseUrl:
     type: string
-    default: ""
-  buildType:
+  buildId:
     type: string
-    default: "debug-apk"
-  ci_provider:
+  buildToken:
     type: string
-    default: "circleci"
-  keystoreUrl:
-    type: string
-    default: ""
-  keystorePassword:
-    type: string
-    default: ""
-  keyAlias:
-    type: string
-    default: ""
-  keyPassword:
-    type: string
-    default: ""
-  timeoutMinutes:
-    type: integer
-    default: 8
 
 jobs:
   build:
-    docker:
-      - image: cimg/android:2024.11.1-node
+    machine:
+      image: ubuntu-2204:current
     resource_class: medium
-    working_directory: ~/project
-
-    environment:
-      USER_ID: << pipeline.parameters.userId >>
-      BUILD_ID: << pipeline.parameters.buildId >>
-      APP_BASE_URL: << pipeline.parameters.appBaseUrl >>
-      BUILD_TYPE: << pipeline.parameters.buildType >>
-      CI_PROVIDER: << pipeline.parameters.ci_provider >>
-      PROJECT_URL: << pipeline.parameters.projectUrl >>
-      KEYSTORE_URL: << pipeline.parameters.keystoreUrl >>
-      KEYSTORE_PASSWORD: << pipeline.parameters.keystorePassword >>
-      KEY_ALIAS: << pipeline.parameters.keyAlias >>
-      KEY_PASSWORD: << pipeline.parameters.keyPassword >>
-    
     steps:
-      - aws-cli/setup:
-          aws_access_key_id: R2_ACCESS_KEY_ID
-          aws_secret_access_key: R2_SECRET_ACCESS_KEY
-          region: auto
+      - setup_remote_docker:
+          docker_layer_caching: true
 
+      # Langkah 1 (BARU): Minta token ECR jangka pendek dari server Anda
       - run:
-          name: "Report Build In Progress & Start Time"
+          name: Request short-lived ECR token
           command: |
-            set -ex
-            echo "export START_TIME=$(date +%s)" >> $BASH_ENV
-            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "log_update", "message": "Starting build process..."}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
-            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d '{"buildId": "<< pipeline.parameters.buildId >>", "userId": "<< pipeline.parameters.userId >>", "status": "in_progress", "ciProvider": "circleci", "runId": "'"$CIRCLE_WORKFLOW_ID"'"}' "<< pipeline.parameters.appBaseUrl >>/api/github-webhook"
+            JSON_RESPONSE=$(curl -s -f -X POST \
+              -H "Content-Type: application/json" \
+              -d '{"buildId": "<< pipeline.parameters.buildId >>", "buildToken": "<< pipeline.parameters.buildToken >>"}' \
+              "<< pipeline.parameters.appBaseUrl >>/api/request-ecr-token")
+            
+            # Ekstrak token dan URI dari respons JSON
+            ECR_TOKEN=$(echo $JSON_RESPONSE | jq -r .ecrToken)
+            REGISTRY_URI=$(echo $JSON_RESPONSE | jq -r .registryUri | sed 's|https://||') # Hapus https://
 
-      - run:
-          name: "Define Helper Function for Logging"
-          command: |
-            set -ex
-            echo '
-            send_log_update() {
-              MESSAGE="$1"
-              curl --fail --connect-timeout 5 --max-time 10 -X POST \
-                -H "Content-Type: application/json" \
-                -H "X-Build-Secret: $WEBHOOK_SECRET" \
-                -d "{\"buildId\": \"$BUILD_ID\", \"userId\": \"$USER_ID\", \"status\": \"log_update\", \"message\": \"$MESSAGE\"}" \
-                "$APP_BASE_URL/api/github-webhook" || true
-            }
-            ' >> $BASH_ENV
-      
-      - run:
-          name: "Notify: Checking Caches"
-          command: |
-            set -ex
-            source $BASH_ENV
-            send_log_update "Checking all caches (Gradle, SDK, Cordova, NPM)..."
-
-      - restore_cache:
-          name: Restore Gradle Cache
-          keys:
-            - gradle-cache-v6
-
-      - restore_cache:
-          name: Restore Android SDK Cache
-          keys:
-            - android-sdk-v1-35
-
-      - restore_cache:
-          name: Restore Global Cordova CLI Cache
-          keys:
-            - cordova-cli-v1
-
-      - run:
-          name: "Install Cordova CLI (if not cached)"
-          command: |
-            set -ex
-            source $BASH_ENV
-            send_log_update "Preparing Cordova environment..."
-            if ! command -v cordova &> /dev/null; then
-              send_log_update "Cordova CLI not found in cache, installing globally..."
-              sudo npm install -g cordova
-            else
-              send_log_update "Cordova CLI restored from cache."
-            fi
-
-      - run:
-          name: "Download and Unzip Project from R2"
-          command: |
-            set -ex
-            source $BASH_ENV
-            send_log_update "Downloading and extracting project from storage..."
-            mkdir -p cordova-project
-            curl -L -o cordovaProject.zip "$PROJECT_URL"
-            unzip -o cordovaProject.zip -d cordova-project
-      
-      - restore_cache:
-          name: Restore NPM Dependencies Cache
-          keys:
-            - npm-deps-v1-{{ checksum "cordova-project/package.json" }}
-            - npm-deps-v1-
-
-      - run:
-          name: "Install Project Dependencies"
-          working_directory: ~/project/cordova-project
-          command: |
-            set -ex
-            source $BASH_ENV
-            send_log_update "Installing project dependencies (npm)..."
-            npm install > ../npm_install_log.txt 2>&1
-
-      - save_cache:
-          name: Save NPM Dependencies Cache
-          key: npm-deps-v1-{{ checksum "cordova-project/package.json" }}
-          paths:
-            - cordova-project/node_modules
-
-      - run:
-          name: "Prepare Platform & Install SDK"
-          working_directory: ~/project/cordova-project
-          command: |
-            set -ex
-            source $BASH_ENV
-
-            if [[ "$BUILD_TYPE" == "release-apk" || "$BUILD_TYPE" == "release-aab" ]]; then
-              send_log_update "Preparing release configuration..."
-              curl -L -o release.jks "$KEYSTORE_URL"
-              PACKAGE_TYPE="apk"
-              if [[ "$BUILD_TYPE" == "release-aab" ]]; then
-                PACKAGE_TYPE="bundle"
-              fi
-              printf '{ "android": { "release": { "keystore": "release.jks", "storePassword": "%s", "alias": "%s", "password": "%s", "packageType": "%s" } } }' \
-                "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" "$PACKAGE_TYPE" > build.json
+            if [ -z "$ECR_TOKEN" ] || [ "$ECR_TOKEN" == "null" ]; then
+              echo "Failed to retrieve a valid ECR token."
+              exit 1
             fi
             
-            send_log_update "Setting up Android platform..."
-            cordova platform add android
-            
-            # [PERBAIKAN FINAL] Menghapus logika penguncian Gradle karena tidak lagi didukung
-            # Kita akan mengandalkan versi Gradle dari Docker image.
+            echo "Successfully retrieved ECR token."
+            # Simpan token ke file agar bisa digunakan di langkah berikutnya
+            echo "export ECR_TOKEN='$ECR_TOKEN'" >> $BASH_ENV
+            echo "export REGISTRY_URI='$REGISTRY_URI'" >> $BASH_ENV
 
-            send_log_update "Accepting SDK licenses & installing tools..."
-            yes | sdkmanager --licenses > /dev/null || true
-            sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
+      # Langkah 2 (BARU): Login ke ECR menggunakan token dinamis
       - run:
-          name: "Compile Android Project"
-          working_directory: ~/project/cordova-project
-          no_output_timeout: << pipeline.parameters.timeoutMinutes >>m
+          name: Log in to Amazon ECR
           command: |
-            set -ex
             source $BASH_ENV
-            send_log_update "Preparing platform assets..."
-            cordova prepare android
-            
-            send_log_update "Starting Android compilation (this may take a while)..."
-            {
-              if [[ "$BUILD_TYPE" == "debug-apk" ]]; then
-                cordova build android --debug --verbose -- --gradleArg=--no-daemon
-              else
-                cordova build android --release --verbose --buildConfig=build.json -- --gradleArg=--no-daemon
-              fi
-            } > ../build_log.txt 2>&1
-            
-      - save_cache:
-          name: Save Gradle Cache
-          key: gradle-cache-v6
-          paths:
-            - /home/circleci/.gradle
+            # Decode token base64 dan pipe sebagai password ke docker login
+            echo $ECR_TOKEN | base64 --decode | docker login --username AWS --password-stdin $REGISTRY_URI
 
-      - save_cache:
-          name: Save Android SDK Cache
-          key: android-sdk-v1-35
-          paths:
-            - /home/circleci/android-sdk/platforms/android-35
-            - /home/circleci/android-sdk/build-tools/35.0.0
-
-      - save_cache:
-          name: Save Global Cordova CLI Cache
-          key: cordova-cli-v1
-          paths:
-            - /usr/local/lib/node_modules/cordova
-
+      # Langkah 3: Jalankan Build Engine (tidak berubah)
       - run:
-          name: "Upload Build to R2 and Report Success"
-          when: on_success
+          name: Build Cordova Project via Secure Engine
           command: |
-            set -ex
             source $BASH_ENV
-            send_log_update "Packaging and uploading build artifact to R2..."
-            ARTIFACT_PATH=""
-            ARTIFACT_EXT=""
-            if [[ "$BUILD_TYPE" == "release-aab" ]]; then
-              ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/bundle/release -name "*.aab" | head -n 1)
-              ARTIFACT_EXT="aab"
-            elif [[ "$BUILD_TYPE" == "release-apk" ]]; then
-              ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-              ARTIFACT_EXT="apk"
-            else
-              ARTIFACT_PATH=$(find cordova-project/platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-              ARTIFACT_EXT="apk"
-            fi
-            if [ -z "$ARTIFACT_PATH" ]; then echo "Build artifact not found!"; exit 1; fi
-            R2_FILENAME="${BUILD_TYPE}-${BUILD_ID}.${ARTIFACT_EXT}"
-            R2_OBJECT_KEY="builds/${USER_ID}/${R2_FILENAME}"
-            R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-            aws s3 cp "$ARTIFACT_PATH" "s3://${R2_BUCKET_NAME}/${R2_OBJECT_KEY}" --endpoint-url "$R2_ENDPOINT"
-            DOWNLOAD_URL="${R2_PUBLIC_URL}/${R2_OBJECT_KEY}"
-            end_time=$(date +%s)
-            duration=$((end_time - START_TIME))
-            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d "{\"buildId\": \"$BUILD_ID\", \"userId\": \"$USER_ID\", \"status\": \"complete\", \"durationSeconds\": \"$duration\", \"downloadUrl\": \"$DOWNLOAD_URL\", \"ciProvider\": \"$CI_PROVIDER\"}" "$APP_BASE_URL/api/github-webhook"
-
-      - run:
-          name: "Upload Log to R2 and Report Failure"
-          when: on_fail
-          command: |
-            set -ex
-            cat npm_install_log.txt build_log.txt > final_log.txt 2>/dev/null || cat build_log.txt > final_log.txt 2>/dev/null || cat npm_install_log.txt > final_log.txt 2>/dev/null || echo "Build failed in an early stage. No detailed log available." > final_log.txt
-            R2_LOG_FILENAME="${BUILD_ID}.log"
-            R2_LOG_OBJECT_KEY="logs/${USER_ID}/${R2_LOG_FILENAME}"
-            R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-            aws s3 cp final_log.txt "s3://${R2_BUCKET_NAME}/${R2_LOG_OBJECT_KEY}" --endpoint-url "$R2_ENDPOINT"
-            LOG_URL="${R2_PUBLIC_URL}/${R2_LOG_OBJECT_KEY}"
-            LOG_SNIPPET=$(tail -n 20 final_log.txt | sed 's|/home/circleci/project/cordova-project/[^ ]*|[PROJECT_PATH]|g' | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
-            source $BASH_ENV
-            end_time=$(date +%s)
-            duration=$((end_time - START_TIME))
-            curl --fail -X POST -H "Content-Type: application/json" -H "X-Build-Secret: $WEBHOOK_SECRET" -d "{\"buildId\": \"$BUILD_ID\", \"userId\": \"$USER_ID\", \"status\": \"failed\", \"durationSeconds\": \"$duration\", \"logUrl\": \"$LOG_URL\", \"logSnippet\": \"$LOG_SNIPPET\", \"ciProvider\": \"$CI_PROVIDER\"}" "$APP_BASE_URL/api/github-webhook"
+            docker run --rm \
+              -e INPUT_APPBASEURL="<< pipeline.parameters.appBaseUrl >>" \
+              -e INPUT_BUILDID="<< pipeline.parameters.buildId >>" \
+              -e INPUT_BUILDTOKEN="<< pipeline.parameters.buildToken >>" \
+              -e CI_PROVIDER="circleci" \
+              -e CIRCLE_WORKFLOW_ID=$CIRCLE_WORKFLOW_ID \
+              -e CIRCLE_PROJECT_REPONAME=$CIRCLE_PROJECT_REPONAME \
+              $REGISTRY_URI/swaplab/cordova-build-engine:main
 
 workflows:
-  build_cordova_app:
-    when: << pipeline.parameters.buildId >>
+  build_app:
     jobs:
       - build
