@@ -17,6 +17,14 @@ jobs:
     steps:
       - checkout
       # Langkah 1: Menyiapkan lingkungan Docker terpisah dengan Layer Caching aktif.
+
+      - restore_cache:
+          keys:
+            - v1-deps-{{ checksum "package-lock.json" }}
+            # Fallback ke cache terbaru jika tidak ada yang cocok
+            - v1-deps-
+
+      
       - setup_remote_docker:
           docker_layer_caching: true
 
@@ -59,6 +67,12 @@ jobs:
               -e GITHUB_REPOSITORY="$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME" \
               -e GITHUB_RUN_ID=$CIRCLE_WORKFLOW_ID \
               $REGISTRY_URI/swaplab/cordova-build-engine:main
+
+
+      - save_cache:
+          key: v1-deps-{{ checksum "package-lock.json" }}
+          paths:
+            - "/var/lib/docker" 
 
 workflows:
   build_app:
