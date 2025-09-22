@@ -11,9 +11,6 @@ parameters:
   buildToken:
     type: string
     default: ""
-  userId:
-    type: string
-    default: ""
 
 jobs:
   build:
@@ -59,7 +56,6 @@ jobs:
               -e INPUT_APPBASEURL="<< pipeline.parameters.appBaseUrl >>" \
               -e INPUT_BUILDID="<< pipeline.parameters.buildId >>" \
               -e INPUT_BUILDTOKEN="<< pipeline.parameters.buildToken >>" \
-              -e INPUT_USERID="<< pipeline.parameters.userId >>" \
               -e CI_PROVIDER="circleci" \
               -e CIRCLE_WORKFLOW_ID=$CIRCLE_WORKFLOW_ID \
               -e CIRCLE_PROJECT_REPONAME=$CIRCLE_PROJECT_REPONAME \
