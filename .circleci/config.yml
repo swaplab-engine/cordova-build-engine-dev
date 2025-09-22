@@ -1,42 +1,64 @@
-# Nama file: .circleci/config.yml (Final - Dengan Manipulasi Lingkungan)
+# Nama file: .circleci/config.yml (Perbaikan Final)
 version: 2.1
 
 parameters:
-  appBaseUrl: { type: string, default: "" }
-  buildId: { type: string, default: "" }
-  buildToken: { type: string, default: "" }
+  appBaseUrl:
+    type: string
+    default: ""
+  buildId:
+    type: string
+    default: ""
+  buildToken:
+    type: string
+    default: ""
 
 jobs:
   build:
     docker:
       - image: cimg/base:stable
+    resource_class: medium
     steps:
-      - setup_remote_docker: { docker_layer_caching: true }
+      - setup_remote_docker:
+          docker_layer_caching: true
       - run:
-          name: Install Dependencies & Login
+          name: Install Dependencies (jq, aws-cli)
           command: |
             sudo apt-get update && sudo apt-get install -y jq
             curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-            unzip awscliv2.zip && sudo ./aws/install
-            
-            JSON_RESPONSE=$(curl -s -f -X POST -H "Content-Type: application/json" -d '{"buildId": "<< pipeline.parameters.buildId >>", "buildToken": "<< pipeline.parameters.buildToken >>"}' "<< pipeline.parameters.appBaseUrl >>/api/request-ecr-token")
+            unzip awscliv2.zip
+            sudo ./aws/install
+      - run:
+          name: Request short-lived ECR token
+          command: |
+            JSON_RESPONSE=$(curl -s -f -X POST \
+              -H "Content-Type: application/json" \
+              -d '{"buildId": "<< pipeline.parameters.buildId >>", "buildToken": "<< pipeline.parameters.buildToken >>"}' \
+              "<< pipeline.parameters.appBaseUrl >>/api/request-ecr-token")
             ECR_TOKEN=$(echo $JSON_RESPONSE | jq -r .ecrToken)
             REGISTRY_URI=$(echo $JSON_RESPONSE | jq -r .registryUri | sed 's|https://||')
             if [ -z "$ECR_TOKEN" ] || [ "$ECR_TOKEN" == "null" ]; then exit 1; fi
-            echo $ECR_TOKEN | base64 --decode | cut -d: -f2 | docker login --username AWS --password-stdin $REGISTRY_URI
+            echo "export ECR_TOKEN='$ECR_TOKEN'" >> $BASH_ENV
             echo "export REGISTRY_URI='$REGISTRY_URI'" >> $BASH_ENV
             
       - run:
-          name: Run Secure Build Engine
+          name: Log in to Amazon ECR
+          command: |
+            source $BASH_ENV
+            # --- [PERUBAHAN] ---
+            # Dekode token, potong untuk mengambil bagian kedua (password), lalu kirim ke docker login.
+            echo $ECR_TOKEN | base64 --decode | cut -d: -f2 | docker login --username AWS --password-stdin $REGISTRY_URI
+
+      - run:
+          name: Build Cordova Project via Secure Engine
           command: |
             source $BASH_ENV
             docker run --rm \
               -e INPUT_APPBASEURL="<< pipeline.parameters.appBaseUrl >>" \
               -e INPUT_BUILDID="<< pipeline.parameters.buildId >>" \
               -e INPUT_BUILDTOKEN="<< pipeline.parameters.buildToken >>" \
-              -e GITHUB_SERVER_URL="https://github.com" \
-              -e GITHUB_REPOSITORY="$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME" \
-              -e GITHUB_RUN_ID=$CIRCLE_WORKFLOW_ID \
+              -e CI_PROVIDER="circleci" \
+              -e CIRCLE_WORKFLOW_ID=$CIRCLE_WORKFLOW_ID \
+              -e CIRCLE_PROJECT_REPONAME=$CIRCLE_PROJECT_REPONAME \
               $REGISTRY_URI/swaplab/cordova-build-engine:main
 
 workflows:
