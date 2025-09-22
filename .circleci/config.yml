@@ -1,4 +1,4 @@
-# Nama file: .circleci/config.yml (Versi Final dengan Kontrol Pemicu)
+# Nama file: .circleci/config.yml (Perbaikan Final)
 version: 2.1
 
 parameters:
@@ -30,7 +30,6 @@ jobs:
       - run:
           name: Request short-lived ECR token
           command: |
-            # ... Skrip Anda tidak berubah ...
             JSON_RESPONSE=$(curl -s -f -X POST \
               -H "Content-Type: application/json" \
               -d '{"buildId": "<< pipeline.parameters.buildId >>", "buildToken": "<< pipeline.parameters.buildToken >>"}' \
@@ -40,16 +39,18 @@ jobs:
             if [ -z "$ECR_TOKEN" ] || [ "$ECR_TOKEN" == "null" ]; then exit 1; fi
             echo "export ECR_TOKEN='$ECR_TOKEN'" >> $BASH_ENV
             echo "export REGISTRY_URI='$REGISTRY_URI'" >> $BASH_ENV
+            
       - run:
           name: Log in to Amazon ECR
           command: |
-            # ... Skrip Anda tidak berubah ...
             source $BASH_ENV
-            echo $ECR_TOKEN | base64 --decode | docker login --username AWS --password-stdin $REGISTRY_URI
+            # --- [PERUBAHAN] ---
+            # Dekode token, potong untuk mengambil bagian kedua (password), lalu kirim ke docker login.
+            echo $ECR_TOKEN | base64 --decode | cut -d: -f2 | docker login --username AWS --password-stdin $REGISTRY_URI
+
       - run:
           name: Build Cordova Project via Secure Engine
           command: |
-            # ... Skrip Anda tidak berubah ...
             source $BASH_ENV
             docker run --rm \
               -e INPUT_APPBASEURL="<< pipeline.parameters.appBaseUrl >>" \
@@ -62,9 +63,6 @@ jobs:
 
 workflows:
   build_app:
-    # --- [PERUBAHAN] ---
-    # Kondisi ini memastikan workflow HANYA berjalan jika parameter 'buildId' diberikan,
-    # yang berarti hanya saat dipicu oleh API dari server.js Anda.
     when: << pipeline.parameters.buildId >>
     jobs:
       - build
