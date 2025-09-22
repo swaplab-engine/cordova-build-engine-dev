@@ -4,10 +4,13 @@ version: 2.1
 parameters:
   appBaseUrl:
     type: string
+    default: "" # <-- TAMBAHKAN INI
   buildId:
     type: string
+    default: "" # <-- TAMBAHKAN INI
   buildToken:
     type: string
+    default: "" # <-- TAMBAHKAN INI
 
 jobs:
   build:
