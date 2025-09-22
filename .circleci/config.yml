@@ -18,6 +18,7 @@ jobs:
     # Menggunakan machine executor dengan image Ubuntu LTS yang sudah termasuk Docker.
     machine:
       image: swaplab/circleci-worker:latest
+      resource_class: medium
     
     steps:
       - checkout
