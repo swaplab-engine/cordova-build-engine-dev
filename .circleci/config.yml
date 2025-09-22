@@ -20,10 +20,7 @@ jobs:
 
       - restore_cache:
           keys:
-            - v1-deps-{{ checksum "package-lock.json" }}
-            # Fallback ke cache terbaru jika tidak ada yang cocok
-            - v1-deps-
-
+            - v1-docker-layers
       
       - setup_remote_docker:
           docker_layer_caching: true
@@ -69,10 +66,10 @@ jobs:
               $REGISTRY_URI/swaplab/cordova-build-engine:main
 
 
-      - save_cache:
-          key: v1-deps-{{ checksum "package-lock.json" }}
+     - save_cache:
+          key: v1-docker-layers 
           paths:
-            - "/var/lib/docker" 
+            - "/var/lib/docker"
 
 workflows:
   build_app:
