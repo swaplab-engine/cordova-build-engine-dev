@@ -15,6 +15,7 @@ jobs:
     docker:
       - image: cimg/base:stable
     steps:
+      - checkout
       # Langkah 1: Menyiapkan lingkungan Docker terpisah dengan Layer Caching aktif.
       - setup_remote_docker:
           docker_layer_caching: true
