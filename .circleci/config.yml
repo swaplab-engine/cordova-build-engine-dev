@@ -1,13 +1,10 @@
-# Nama file: .circleci/config.yml
-# Pendekatan: Menggunakan 'machine' executor untuk stabilitas
-# dan caching manual 'docker save/load' untuk efisiensi.
+# Nama file: .circleci/config.yml (Final & Praktik Terbaik)
 version: 2.1
 
-# Menggunakan Orb resmi dari CircleCI untuk mengelola instalasi AWS CLI.
-orbs:
-  aws-cli: circleci/aws-cli@4.1
+# 'orbs' tidak lagi diperlukan karena aws-cli sudah ada di dalam image kustom kita.
+# orbs:
+#   aws-cli: circleci/aws-cli@4.1
 
-# Parameter yang diterima dari server.js saat build dipicu.
 parameters:
   appBaseUrl: { type: string, default: "" }
   buildId: { type: string, default: "" }
@@ -15,31 +12,26 @@ parameters:
 
 jobs:
   build:
-    # Menggunakan machine executor dengan image Ubuntu LTS yang sudah termasuk Docker.
-    machine:
-      image: swaplab/circleci-worker:latest
-      resource_class: medium
+    # --- [PERUBAHAN 1] ---
+    # Kembali ke 'docker' executor dan gunakan "image pekerja" kustom Anda.
+    # Ganti 'namaanda' dengan username Docker Hub Anda.
+    docker:
+      - image: swaplab/circleci-worker:latest
     
     steps:
       - checkout
 
-      # Memulihkan cache Docker dari build sebelumnya.
-      - restore_cache:
-          keys:
-            - v1-docker-image-cache
+      # --- [PERUBAHAN 2] ---
+      # 'setup_remote_docker' dengan 'docker_layer_caching' adalah satu-satunya
+      # hal yang diperlukan untuk caching image. Tidak perlu restore/save_cache manual.
+      - setup_remote_docker:
+          docker_layer_caching: true
 
-      # Memuat image Docker dari cache jika file-nya ada.
-      - run:
-          name: Load Docker Image from Cache
-          command: |
-            if [ -f /tmp/caches/docker-image.tar ]; then
-              echo "✅ Docker cache found, loading image..."
-              docker load < /tmp/caches/docker-image.tar
-            else
-              echo "⚠️ No Docker cache found, will perform a full pull."
-            fi
+      # --- [DIHAPUS] ---
+      # Langkah instalasi AWS CLI dan JQ tidak lagi diperlukan
+      # karena sudah ada di dalam image 'namaanda/circleci-worker:latest'.
 
-      # Meminta token akses sementara ke ECR dari server Anda.
+      # Langkah-langkah lain tetap sama persis.
       - run:
           name: Request short-lived ECR token
           command: |
@@ -50,16 +42,12 @@ jobs:
             echo "export ECR_TOKEN='$ECR_TOKEN'" >> $BASH_ENV
             echo "export REGISTRY_URI='$REGISTRY_URI'" >> $BASH_ENV
 
-      # Login ke Amazon ECR menggunakan token sementara.
       - run:
           name: Log in to Amazon ECR
           command: |
             source $BASH_ENV
             echo $ECR_TOKEN | base64 --decode | cut -d: -f2 | docker login --username AWS --password-stdin $REGISTRY_URI
 
-      # Menjalankan "kotak hitam" Anda.
-      # Docker pertama akan mencoba mencari image secara lokal (dari cache yang di-load).
-      # Jika tidak ada, baru ia akan melakukan 'pull' dari ECR.
       - run:
           name: Run Secure Build Engine
           command: |
@@ -73,19 +61,6 @@ jobs:
               -e GITHUB_RUN_ID=$CIRCLE_WORKFLOW_ID \
               $REGISTRY_URI/swaplab/cordova-build-engine:main
 
-      # Menyimpan image Docker ke dalam file cache untuk build berikutnya.
-      - run:
-          name: Save Docker Image to Cache
-          command: |
-            mkdir -p /tmp/caches
-            docker save $REGISTRY_URI/swaplab/cordova-build-engine:main > /tmp/caches/docker-image.tar
-
-      - save_cache:
-          key: v1-docker-image-cache
-          paths:
-            - /tmp/caches
-
-# Workflow hanya akan berjalan jika dipicu oleh API (memiliki 'buildId').
 workflows:
   build_app:
     when: << pipeline.parameters.buildId >>
