@@ -31,17 +31,6 @@ jobs:
               echo "⚠️ Cache Image Docker tidak ditemukan."
             fi
 
-      # === AKHIR BLOK CACHING ===
-
-      # Langkah-langkah lain (Install tools, request token, login) tetap sama.
-      - run:
-          name: Install Dependencies (jq, aws-cli)
-          command: |
-            sudo apt-get update && sudo apt-get install -y jq
-            # Menggunakan Orb akan lebih baik, tapi ini juga berfungsi
-            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-            unzip awscliv2.zip && sudo ./aws/install
-
       - run:
           name: Request short-lived ECR token
           # ... (tidak berubah)
