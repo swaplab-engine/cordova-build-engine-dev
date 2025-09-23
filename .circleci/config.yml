@@ -14,16 +14,6 @@ jobs:
     steps:
       - checkout
 
-      # --- [DIHAPUS] ---
-      # Langkah 'aws-cli/setup' atau instalasi manual AWS CLI
-      # tidak lagi diperlukan karena sudah terpasang di 'machine image'.
-
-      # Memasang JQ yang mungkin belum ada.
-      - run:
-          name: Install JQ
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y jq
 
       # Blok Caching (Gabungan)
       - restore_cache:
