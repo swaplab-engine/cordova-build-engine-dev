@@ -1,4 +1,4 @@
-# Nama file: .circleci/config.yml (Solusi Final dengan Caching Manual)
+# Nama file: .circleci/config.yml (Final dengan Caching Stabil)
 version: 2.1
 
 parameters:
@@ -8,39 +8,43 @@ parameters:
 
 jobs:
   build:
-    # Menggunakan machine executor dengan image Ubuntu LTS yang sudah termasuk Docker.
     machine:
       image: ubuntu-2204:current
     
     steps:
       - checkout
 
+      # === BLOK CACHING (GABUNGAN) ===
+      # Memulihkan cache untuk Docker Image DAN Gradle.
       - restore_cache:
           keys:
-            # Kunci ini akan mencoba mencari cache yang persis sama
-            - v1-gradle-wrapper-{{ checksum "gradle/wrapper/gradle-wrapper.properties" }}
-            # Jika tidak ada, gunakan cache gradle terbaru
-            - v1-gradle-wrapper-
+            - v1-build-cache-{{ .Branch }} # Mencoba cache spesifik untuk branch
+            - v1-build-cache-           # Fallback ke cache terbaru
 
-      # Memulihkan file cache (docker-image.tar) dari build sebelumnya.
-      - restore_cache:
-          keys:
-            - v1-docker-image-cache-main
-
-      # Memuat image Docker dari file cache jika ada, untuk menghindari pull.
       - run:
           name: Load Docker Image from Cache
           command: |
             if [ -f /tmp/caches/docker-image.tar ]; then
-              echo "✅ Cache ditemukan, memuat image Docker..."
+              echo "✅ Cache Image Docker ditemukan, memuat..."
               docker load < /tmp/caches/docker-image.tar
             else
-              echo "⚠️ Cache tidak ditemukan, akan melakukan pull penuh."
+              echo "⚠️ Cache Image Docker tidak ditemukan."
             fi
 
-      # Meminta token akses sementara ke ECR.
+      # === AKHIR BLOK CACHING ===
+
+      # Langkah-langkah lain (Install tools, request token, login) tetap sama.
+      - run:
+          name: Install Dependencies (jq, aws-cli)
+          command: |
+            sudo apt-get update && sudo apt-get install -y jq
+            # Menggunakan Orb akan lebih baik, tapi ini juga berfungsi
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip && sudo ./aws/install
+
       - run:
           name: Request short-lived ECR token
+          # ... (tidak berubah)
           command: |
             JSON_RESPONSE=$(curl -s -f -X POST -H "Content-Type: application/json" -d '{"buildId": "<< pipeline.parameters.buildId >>", "buildToken": "<< pipeline.parameters.buildToken >>"}' "<< pipeline.parameters.appBaseUrl >>/api/request-ecr-token")
             ECR_TOKEN=$(echo $JSON_RESPONSE | jq -r .ecrToken)
@@ -49,21 +53,22 @@ jobs:
             echo "export ECR_TOKEN='$ECR_TOKEN'" >> $BASH_ENV
             echo "export REGISTRY_URI='$REGISTRY_URI'" >> $BASH_ENV
 
-      # Login ke Amazon ECR.
       - run:
           name: Log in to Amazon ECR
+          # ... (tidak berubah)
           command: |
             source $BASH_ENV
             echo $ECR_TOKEN | base64 --decode | cut -d: -f2 | docker login --username AWS --password-stdin $REGISTRY_URI
 
-      # Menjalankan "kotak hitam". Docker akan cek image lokal dulu (dari cache) sebelum pull.
       - run:
           name: Run Secure Build Engine
+          # --- [PERUBAHAN PENTING] ---
+          # Kita akan me-mount direktori cache Gradle dari runner ke dalam kontainer.
           command: |
             source $BASH_ENV
-            # Untuk keamanan, kita lakukan pull dengan flag --quiet untuk memastikan image terbaru.
-            # Jika image sudah ada dari cache, proses ini akan sangat cepat.
-            docker pull --quiet $REGISTRY_URI/swaplab/cordova-build-engine:main
+            
+            # Membuat direktori cache di runner jika belum ada
+            mkdir -p /home/circleci/project/.gradle
             
             docker run --rm \
               -e INPUT_APPBASEURL="<< pipeline.parameters.appBaseUrl >>" \
@@ -72,9 +77,13 @@ jobs:
               -e GITHUB_SERVER_URL="https://github.com" \
               -e GITHUB_REPOSITORY="$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME" \
               -e GITHUB_RUN_ID=$CIRCLE_WORKFLOW_ID \
+              \
+              # Me-mount volume: menghubungkan folder .gradle di runner ke /github/workspace/.gradle di kontainer
+              -v /home/circleci/project/.gradle:/github/workspace/.gradle \
+              \
               $REGISTRY_URI/swaplab/cordova-build-engine:main
 
-      # Menyimpan image Docker ke dalam file .tar untuk build berikutnya.
+      # === BLOK PENYIMPANAN CACHE (GABUNGAN) ===
       - run:
           name: Save Docker Image to Cache
           command: |
@@ -82,16 +91,10 @@ jobs:
             docker save $REGISTRY_URI/swaplab/cordova-build-engine:main > /tmp/caches/docker-image.tar
 
       - save_cache:
-          key: v1-gradle-wrapper-{{ checksum "gradle/wrapper/gradle-wrapper.properties" }}
-          paths:
-            - ~/.gradle/caches
-            - ~/.gradle/wrapper
-      
-      
-      - save_cache:
-          key: v1-docker-image-cache-main
+          key: v1-build-cache-{{ .Branch }}
           paths:
             - /tmp/caches
+            - /home/circleci/project/.gradle # <-- Menyimpan cache Gradle juga
 
 workflows:
   build_app:
