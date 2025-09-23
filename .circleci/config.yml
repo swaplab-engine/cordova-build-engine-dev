@@ -15,6 +15,13 @@ jobs:
     steps:
       - checkout
 
+      - restore_cache:
+          keys:
+            # Kunci ini akan mencoba mencari cache yang persis sama
+            - v1-gradle-wrapper-{{ checksum "gradle/wrapper/gradle-wrapper.properties" }}
+            # Jika tidak ada, gunakan cache gradle terbaru
+            - v1-gradle-wrapper-
+
       # Memulihkan file cache (docker-image.tar) dari build sebelumnya.
       - restore_cache:
           keys:
@@ -74,6 +81,13 @@ jobs:
             mkdir -p /tmp/caches
             docker save $REGISTRY_URI/swaplab/cordova-build-engine:main > /tmp/caches/docker-image.tar
 
+      - save_cache:
+          key: v1-gradle-wrapper-{{ checksum "gradle/wrapper/gradle-wrapper.properties" }}
+          paths:
+            - ~/.gradle/caches
+            - ~/.gradle/wrapper
+      
+      
       - save_cache:
           key: v1-docker-image-cache-main
           paths:
